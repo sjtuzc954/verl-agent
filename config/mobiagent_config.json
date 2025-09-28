@@ -1,0 +1,11 @@
+{
+    "adb_endpoints": {
+        "train": [],
+        "val": []
+    },
+    "grounder_url": "http://localhost:8000/v1",
+    "tasks": {
+        "train": [],
+        "val": []
+    }
+}

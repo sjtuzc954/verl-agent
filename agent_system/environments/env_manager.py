@@ -21,8 +21,9 @@ from functools import partial
 import os
 from agent_system.environments.prompts import *
 from agent_system.environments.base import EnvironmentManagerBase, to_numpy
-from agent_system.memory import SimpleMemory, SearchMemory
+from agent_system.memory import SimpleMemory, SearchMemory, MobiAgentMemory
 from omegaconf import OmegaConf
+import json
 
 def parse_gamefile(infos):
     gamefile = []
@@ -599,6 +600,59 @@ class AppWorldEnvironmentManager(EnvironmentManagerBase):
                 postprocess_text_obs.append(obs)
         return postprocess_text_obs
 
+class MobiAgentEnvironmentManager(EnvironmentManagerBase):
+    
+    def __init__(self, envs, projection_f, config):
+        self.memory = MobiAgentMemory()
+        super().__init__(envs, projection_f, config)
+
+    def reset(self, kwargs) -> Dict[str, Any]:
+        img_obs, infos = self.envs.reset()
+        self.tasks = [info['task'] for info in infos]
+        self.memory.reset(batch_size=len(img_obs))
+        return {'text': self.build_text_obs(), 'image': img_obs, 'anchor': None}, infos
+
+    def step(self, text_actions: List[str]):
+        # text_actions are json strings returned by decider
+        # converted to dict in projection_f
+        actions, valids = self.projection_f(text_actions)
+        
+        # TODO: call grounder in each worker
+        img_obs, rewards, dones, infos = self.envs.step(actions)
+
+        # obs does not need to be stored in memory
+        self.memory.store({"action": text_actions})
+
+        # TODO: maintain memory, and build text observation based on it
+        next_observations = {
+            'text': self.build_text_obs(),
+            'image': img_obs,
+            'anchor': None
+        }
+        # add action_valid to infos
+        for i, info in enumerate(infos):
+            info['is_action_valid'] = to_numpy(valids[i] and info["status"] == "ok")
+
+        rewards = to_numpy(rewards)
+        dones = to_numpy(dones)
+        
+        return next_observations, rewards, dones, infos
+    
+    def build_text_obs(self) -> List[str]:
+        text_obs = []
+        memory_contexts = self.memory.fetch(action_key="action")
+        for i in range(len(self.memory)):
+            obs = DECIDER_PROMPT.format(task=self.tasks[i], memory_context=memory_contexts[i])
+            text_obs.append(obs)
+        return text_obs
+
+
+    def close(self) -> None:
+        """
+        Close the environment and release resources.
+        """
+        self.envs.close()
+
 def make_envs(config):
     """
     Create enviroments 
@@ -693,6 +747,24 @@ def make_envs(config):
         projection_f = partial(appworld_projection)
         envs = AppWorldEnvironmentManager(_envs, projection_f, config)
         val_envs = AppWorldEnvironmentManager(_val_envs, projection_f, config)
+        return envs, val_envs
+    elif "android" in config.env.env_name.lower():
+        from agent_system.environments.env_package.mobiagent import build_mobiagent_envs, mobiagent_projection
+
+        # TODO: load tasks and adb_endpoints from config
+        with open(config.env.extra_config_file, "w", encoding="utf-8") as f:
+            extra_config = json.load(f)
+            train_tasks = extra_config["tasks"]["train"]
+            val_tasks = extra_config["tasks"]["val"]
+            train_adb_endpoints = extra_config["adb_endpoints"]["train"]
+            val_adb_endpoints = extra_config["adb_endpoints"]["val"]
+            grounder_url = extra_config["grounder_url"]
+        _envs = build_mobiagent_envs(seed=config.env.seed, env_num=config.data.train_batch_size, group_n=group_n, adb_endpoints=train_adb_endpoints, tasks=train_tasks, grounder_url=grounder_url, resources_per_worker=resources_per_worker)
+        _val_envs = build_mobiagent_envs(seed=config.env.seed + 1000, env_num=config.data.val_batch_size, group_n=1, adb_endpoints=val_adb_endpoints, tasks=val_tasks, grounder_url=grounder_url, resources_per_worker=resources_per_worker)
+
+        projection_f = partial(mobiagent_projection)
+        envs = MobiAgentEnvironmentManager(_envs, projection_f, config)
+        val_envs = MobiAgentEnvironmentManager(_val_envs, projection_f, config)
         return envs, val_envs
     else:
         print("Environment not supported")

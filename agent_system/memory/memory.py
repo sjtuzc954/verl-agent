@@ -100,6 +100,28 @@ class SimpleMemory(BaseMemory):
         return memory_contexts, valid_lengths
     
 
+class MobiAgentMemory(SimpleMemory):
+
+    def fetch(
+        self,
+        action_key: str = "action",
+    ) -> List[str]:
+        
+        memory_contexts = []
+
+        for env_idx in range(self.batch_size):
+            history = self._data[env_idx]
+
+            if len(history) == 0:
+                history_str = "(No history)"
+            else:
+                history_str = "\n".join(f"{idx}. {h}" for idx, h in enumerate(history, 1))
+
+            memory_contexts.append(history_str)
+
+        return memory_contexts
+
+
 class SearchMemory(BaseMemory):
     """
     Memory manager for search tasks: responsible for storing & fetching
