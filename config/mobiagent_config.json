@@ -1,11 +1,16 @@
 {
     "adb_endpoints": {
-        "train": [],
+        "train": ["127.0.0.1:38429","127.0.0.1:41157"],
         "val": []
     },
-    "grounder_url": "http://localhost:8000/v1",
+    "grounder_url": "http://123.60.91.241:8080/v1",
     "tasks": {
-        "train": [],
+        "train": [
+            {
+                "description": "点击顶部的搜索框",
+                "package_name": "me.ele"
+            }
+        ],
         "val": []
     }
 }

@@ -10,6 +10,7 @@ from typing import Any
 from openai import OpenAI
 import json
 import traceback
+import numpy as np
 
 from agent_system.environments.prompts import GROUNDER_PROMPT
 
@@ -104,7 +105,7 @@ class MobiAgentWorker:
         img.save(buffered, format="JPEG")
         self.last_obs_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-        return img
+        return np.array(img)
     
     def _call_grounder(self, reasoning: str, target_element: str):
         grounder_prompt = GROUNDER_PROMPT.format(
@@ -134,7 +135,7 @@ class MobiAgentWorker:
     def step(self, action: dict[str, Any]):
         device = self.device
         reward = 0.0
-        info = {}
+        info = {"status": "ok", "won": 0}
         done = False
 
         try:
@@ -154,18 +155,18 @@ class MobiAgentWorker:
                 time.sleep(1)
             elif action_type == "done":
                 done = True
+                info["won"] = 1
             else:
                 logging.info(f"Unknown action type, skipping execution: {action_type}")
 
             time.sleep(2)
             
             obs = self._get_obs()
-            info = {"status": "ok"}
         except Exception as e:
-            reward = 0.0
+            reward = -1.0
             done = True
             obs = None
-            info = {"status": "error", "error": traceback.format_exc()}
+            info = {"status": "error", "error": traceback.format_exc(), "won": 0}
 
         # TODO: how to assign reward?
         return obs, reward, done, info
@@ -176,7 +177,7 @@ class MobiAgentWorker:
     def reset(self, task: dict[str, str]):
         self.device = AndroidDevice(adb_endpoint=self.adb_endpoint)
         self.device.app_start(task["package_name"])
-        return self._get_obs(), {}
+        return self._get_obs(), {"task": task["description"]}
     
 class NonRepeatingRandomPicker:
 
@@ -219,6 +220,7 @@ class MobiAgentMultiProcEnvs:
         self.num_envs = num_envs
         self.group_n = group_n
         self.adb_endpoints = adb_endpoints
+        print(f"Adb endpoints: {adb_endpoints}")
 
         if len(adb_endpoints) != self.num_processes:
             raise ValueError(
@@ -271,7 +273,8 @@ class MobiAgentMultiProcEnvs:
         obs_list, info_list = [], []
         for i, (obs, info) in enumerate(results):
             obs_list.append(obs)
-            info_list.append(info | {"task": self.tasks[i]})
+            info_list.append(info)
+
         return obs_list, info_list
     
 
