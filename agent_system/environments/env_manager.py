@@ -751,23 +751,22 @@ def make_envs(config):
     elif "mobiagent" in config.env.env_name.lower():
         from agent_system.environments.env_package.mobiagent import build_mobiagent_envs, mobiagent_projection
 
-        # TODO: load tasks and adb_endpoints from config
         with open(config.env.extra_config_file, "r", encoding="utf-8") as f:
             extra_config = json.load(f)
             train_tasks = extra_config["tasks"]["train"]
             val_tasks = extra_config["tasks"]["val"]
-            train_adb_endpoints = extra_config["adb_endpoints"]["train"]
-            val_adb_endpoints = extra_config["adb_endpoints"]["val"]
+            train_adb_urls = extra_config["adb_urls"]["train"]
+            val_adb_urls = extra_config["adb_urls"]["val"]
             grounder_url = extra_config["grounder_url"]
-        _envs = build_mobiagent_envs(seed=config.env.seed, env_num=config.data.train_batch_size, group_n=group_n, adb_endpoints=train_adb_endpoints, tasks=train_tasks, grounder_url=grounder_url, resources_per_worker=resources_per_worker)
+        _envs = build_mobiagent_envs(seed=config.env.seed, env_num=config.data.train_batch_size, group_n=group_n, adb_urls=train_adb_urls, tasks=train_tasks, grounder_url=grounder_url, resources_per_worker=resources_per_worker)
         
         projection_f = partial(mobiagent_projection)
         envs = MobiAgentEnvironmentManager(_envs, projection_f, config)
 
-        if len(val_adb_endpoints) == 0:
+        if len(val_adb_urls) == 0:
             val_envs = None
         else:
-            _val_envs = build_mobiagent_envs(seed=config.env.seed + 1000, env_num=config.data.val_batch_size, group_n=1, adb_endpoints=val_adb_endpoints, tasks=val_tasks, grounder_url=grounder_url, resources_per_worker=resources_per_worker)
+            _val_envs = build_mobiagent_envs(seed=config.env.seed + 1000, env_num=config.data.val_batch_size, group_n=1, adb_urls=val_adb_urls, tasks=val_tasks, grounder_url=grounder_url, resources_per_worker=resources_per_worker)
             val_envs = MobiAgentEnvironmentManager(_val_envs, projection_f, config)
         
         return envs, val_envs

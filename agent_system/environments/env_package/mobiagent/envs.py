@@ -11,6 +11,7 @@ from openai import OpenAI
 import json
 import traceback
 import numpy as np
+import requests
 
 from agent_system.environments.prompts import GROUNDER_PROMPT
 
@@ -84,26 +85,29 @@ class AndroidDevice():
 
 class MobiAgentWorker:
 
-    def __init__(self, worker_id: str, grounder_url: str, adb_endpoint: str = None):
+    def __init__(self, worker_id: str, grounder_url: str, adb_url: str = None):
         self.worker_id = worker_id
         self.grounder_url = grounder_url
-        self.adb_endpoint = adb_endpoint
-        self.screenshot_path = f"/tmp/verl-agent-androidenv-screenshot-worker-{self.worker_id}.jpg"
+        self.adb_url = adb_url
+
+        self.screenshot_path = f"verl-agent-androidenv-screenshot-worker-{self.worker_id}.jpg"
         self.last_obs_base64 = None
 
         self.grounder_client = OpenAI(api_key="0", base_url=self.grounder_url)
 
     def _get_obs(self):
-        self.device.screenshot(self.screenshot_path)
+        response = requests.post(f"{self.adb_url}/execute_command/", json={
+            "command": "screenshot",
+            "parameters": {}
+        })
 
-        # resize the screenshot to reduce the size for processing
-        img = Image.open(self.screenshot_path)
+        img_base64 = response.json().get("result")
+        
+        img_bytes = base64.b64decode(img_base64)
+        img = Image.open(io.BytesIO(img_bytes))
         img = img.resize((int(img.width * RESIZE_FACTOR), int(img.height * RESIZE_FACTOR)), Image.Resampling.LANCZOS)
         
-        # save last observation as base64 for calling grounder in step()
-        buffered = io.BytesIO()
-        img.save(buffered, format="JPEG")
-        self.last_obs_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+        self.last_obs = img
 
         return np.array(img)
     
@@ -112,13 +116,16 @@ class MobiAgentWorker:
             reasoning=reasoning,
             description=target_element,
         )
+        buffer = io.BytesIO()
+        self.last_obs.save(buffer, format="JPEG")
+        last_obs_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
         grounder_response_str = self.grounder_client.chat.completions.create(
             model="",
             messages=[
                 {
                     "role": "user",
                     "content": [
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{self.last_obs_base64}"}},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{last_obs_base64}"}},
                         {"type": "text", "text": grounder_prompt},
                     ]
                 }
@@ -133,7 +140,7 @@ class MobiAgentWorker:
         return x, y
 
     def step(self, action: dict[str, Any]):
-        device = self.device
+        # device = self.device
         reward = 0.0
         info = {"status": "ok", "won": 0}
         done = False
@@ -143,14 +150,26 @@ class MobiAgentWorker:
             parameters = action["parameters"]
             reasoning = action["reasoning"]
 
+            request_body = None
             if action_type == "click":
                 target_element = parameters["target_element"]
                 x, y = self._call_grounder(reasoning, target_element)
-                device.click(x, y)
+                request_body = {
+                    "command": "click",
+                    "parameters": {"x": x, "y": y}
+                }
             elif action_type == "input":
-                device.input(parameters["text"])
+                # device.input(parameters["text"])
+                request_body = {
+                    "command": "input",
+                    "parameters": {"text": parameters["text"]}
+                }
             elif action_type == "swipe":
-                device.swipe(parameters["direction"].lower())
+                # device.swipe(parameters["direction"].lower())
+                request_body = {
+                    "command": "swipe",
+                    "parameters": {"direction": parameters["direction"].lower()}
+                }
             elif action_type == "wait":
                 time.sleep(1)
             elif action_type == "done":
@@ -158,6 +177,9 @@ class MobiAgentWorker:
                 info["won"] = 1
             else:
                 logging.info(f"Unknown action type, skipping execution: {action_type}")
+
+            if request_body is not None:
+                requests.post(f"{self.adb_url}/execute_command/", json=request_body)
 
             time.sleep(2)
             
@@ -172,11 +194,15 @@ class MobiAgentWorker:
         return obs, reward, done, info
 
     def close(self):
-        self.device = None
+        pass
 
     def reset(self, task: dict[str, str]):
-        self.device = AndroidDevice(adb_endpoint=self.adb_endpoint)
-        self.device.app_start(task["package_name"])
+        # self.device = AndroidDevice(adb_endpoint=self.adb_endpoint)
+        # self.device.app_start(task["package_name"])
+        requests.post(f"{self.adb_url}/execute_command/", json={
+            "command": "app_start",
+            "parameters": {"package_name": task["package_name"]}
+        })
         return self._get_obs(), {"task": task["description"]}
     
 class NonRepeatingRandomPicker:
@@ -208,7 +234,7 @@ class MobiAgentMultiProcEnvs:
             seed: int,
             num_envs: int,
             group_n: int,
-            adb_endpoints: list[str],
+            adb_urls: list[str],
             tasks: list[dict],
             grounder_url: str,
             resources_per_worker: dict,
@@ -219,12 +245,12 @@ class MobiAgentMultiProcEnvs:
         self.num_processes = num_envs * group_n
         self.num_envs = num_envs
         self.group_n = group_n
-        self.adb_endpoints = adb_endpoints
-        print(f"Adb endpoints: {adb_endpoints}")
+        self.adb_urls = adb_urls
+        print(f"ADB URLs: {adb_urls}")
 
-        if len(adb_endpoints) != self.num_processes:
+        if len(adb_urls) != self.num_processes:
             raise ValueError(
-                f'Number of adb_endpoints ({len(adb_endpoints)}) must match num_envs * group_n ({self.num_processes})',
+                f'Number of adb_endpoints ({len(adb_urls)}) must match num_envs * group_n ({self.num_processes})',
             )
 
         # tasks: list of {"task_description": str, "package_name": str}
@@ -236,7 +262,7 @@ class MobiAgentMultiProcEnvs:
         env_worker = ray.remote(**resources_per_worker)(MobiAgentWorker)
         self.workers = []
         for i in range(self.num_processes):
-            worker = env_worker.remote(worker_id=str(i), grounder_url=grounder_url, adb_endpoint=adb_endpoints[i])
+            worker = env_worker.remote(worker_id=str(i), grounder_url=grounder_url, adb_url=adb_urls[i])
             self.workers.append(worker)
 
     def step(self, actions: list[str]):
@@ -301,7 +327,7 @@ def build_mobiagent_envs(
     seed: int,
     env_num: int,
     group_n: int,
-    adb_endpoints: list[str],
+    adb_urls: list[str],
     tasks: list[dict],
     grounder_url: str,
     resources_per_worker: dict,
@@ -310,7 +336,7 @@ def build_mobiagent_envs(
         seed=seed,
         num_envs=env_num,
         group_n=group_n,
-        adb_endpoints=adb_endpoints,
+        adb_urls=adb_urls,
         tasks=tasks,
         grounder_url=grounder_url,
         resources_per_worker=resources_per_worker
