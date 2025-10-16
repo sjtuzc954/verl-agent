@@ -66,8 +66,6 @@ class MobiAgentDevice:
         self.d.click((x, y))
 
     def input(self, text: str) -> None:
-        print("aaaaa")
-        print(text)
         self.d.sendText(text)
 
     def scroll(self, direction: str, scale: float = 0.5) -> None:
