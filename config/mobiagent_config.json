@@ -1,14 +1,14 @@
 {
-    "adb_urls": {
-        "train": [],
+    "device_server_urls": {
+        "train": ["http://localhost:9000","http://localhost:9001"],
         "val": []
     },
     "grounder_url": "http://123.60.91.241:8080/v1",
     "tasks": {
         "train": [
             {
-                "description": "点击顶部的搜索框",
-                "package_name": "me.ele"
+                "description": "在淘宝上搜索连衣裙，并打开第一个商品链接，进入详情页即可停止",
+                "app_name": "淘宝"
             }
         ],
         "val": []

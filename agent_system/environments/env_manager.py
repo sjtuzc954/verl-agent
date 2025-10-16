@@ -755,18 +755,18 @@ def make_envs(config):
             extra_config = json.load(f)
             train_tasks = extra_config["tasks"]["train"]
             val_tasks = extra_config["tasks"]["val"]
-            train_adb_urls = extra_config["adb_urls"]["train"]
-            val_adb_urls = extra_config["adb_urls"]["val"]
+            train_device_server_urls = extra_config["device_server_urls"]["train"]
+            val_device_server_urls = extra_config["device_server_urls"]["val"]
             grounder_url = extra_config["grounder_url"]
-        _envs = build_mobiagent_envs(seed=config.env.seed, env_num=config.data.train_batch_size, group_n=group_n, adb_urls=train_adb_urls, tasks=train_tasks, grounder_url=grounder_url, resources_per_worker=resources_per_worker)
+        _envs = build_mobiagent_envs(seed=config.env.seed, env_num=config.data.train_batch_size, group_n=group_n, device_server_urls=train_device_server_urls, tasks=train_tasks, grounder_url=grounder_url, resources_per_worker=resources_per_worker)
         
-        projection_f = partial(mobiagent_projection)
+        projection_f = mobiagent_projection
         envs = MobiAgentEnvironmentManager(_envs, projection_f, config)
 
-        if len(val_adb_urls) == 0:
+        if len(val_device_server_urls) == 0:
             val_envs = None
         else:
-            _val_envs = build_mobiagent_envs(seed=config.env.seed + 1000, env_num=config.data.val_batch_size, group_n=1, adb_urls=val_adb_urls, tasks=val_tasks, grounder_url=grounder_url, resources_per_worker=resources_per_worker)
+            _val_envs = build_mobiagent_envs(seed=config.env.seed + 1000, env_num=config.data.val_batch_size, group_n=1, device_server_urls=val_device_server_urls, tasks=val_tasks, grounder_url=grounder_url, resources_per_worker=resources_per_worker)
             val_envs = MobiAgentEnvironmentManager(_val_envs, projection_f, config)
         
         return envs, val_envs

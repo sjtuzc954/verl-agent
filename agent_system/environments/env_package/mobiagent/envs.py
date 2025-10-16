@@ -12,83 +12,19 @@ import json
 import traceback
 import numpy as np
 import requests
+import random
 
 from agent_system.environments.prompts import GROUNDER_PROMPT
 
 RESIZE_FACTOR = 0.5  # Resize factor for screenshots to reduce size
 
-class AndroidDevice():
-    def __init__(self, adb_endpoint=None):
-        super().__init__()
-        if adb_endpoint:
-            self.d = u2.connect(adb_endpoint)
-        else:
-            self.d = u2.connect()
-        self.app_package_names = {
-            "携程": "ctrip.android.view",
-            "同城": "com.tongcheng.android",
-            "飞猪": "com.taobao.trip",
-            "去哪儿": "com.Qunar",
-            "华住会": "com.htinns",
-            "饿了么": "me.ele",
-            "支付宝": "com.eg.android.AlipayGphone",
-            "淘宝": "com.taobao.taobao",
-            "京东": "com.jingdong.app.mall",
-            "美团": "com.sankuai.meituan",
-            "滴滴出行": "com.sdu.didi.psnger",
-            "微信": "com.tencent.mm",
-            "微博": "com.sina.weibo",
-            "携程": "ctrip.android.view",
-        }
-
-    def start_app(self, app):
-        package_name = self.app_package_names.get(app)
-        if not package_name:
-            raise ValueError(f"App '{app}' is not registered with a package name.")
-        self.d.app_start(package_name, stop=True)
-        time.sleep(1)
-        if not self.d.app_wait(package_name, timeout=10):
-            raise RuntimeError(f"Failed to start app '{app}' with package '{package_name}'")
-    
-    def app_start(self, package_name):
-        self.d.app_start(package_name, stop=True)
-        time.sleep(1)
-        if not self.d.app_wait(package_name, timeout=10):
-            raise RuntimeError(f"Failed to start package '{package_name}'")
-        
-    def screenshot(self, path):
-        self.d.screenshot(path)
-
-    def click(self, x, y):
-        self.d.click(x, y)
-
-    def input(self, text):
-        current_ime = self.d.current_ime()
-        self.d.shell(['settings', 'put', 'secure', 'default_input_method', 'com.android.adbkeyboard/.AdbIME'])
-        time.sleep(1)
-        charsb64 = base64.b64encode(text.encode('utf-8')).decode('utf-8')
-        self.d.shell(['am', 'broadcast', '-a', 'ADB_INPUT_B64', '--es', 'msg', charsb64])
-        time.sleep(1)
-        self.d.shell(['settings', 'put', 'secure', 'default_input_method', current_ime])
-        time.sleep(1)
-
-    def swipe(self, direction, scale=0.5):
-        # self.d.swipe_ext(direction, scale)
-        self.d.swipe_ext(direction=direction, scale=scale)
-
-    def keyevent(self, key):
-        self.d.keyevent(key)
-
-    def dump_hierarchy(self):
-        return self.d.dump_hierarchy()
-
 
 class MobiAgentWorker:
 
-    def __init__(self, worker_id: str, grounder_url: str, adb_url: str = None):
+    def __init__(self, worker_id: str, grounder_url: str, device_server_url: str = None):
         self.worker_id = worker_id
         self.grounder_url = grounder_url
-        self.adb_url = adb_url
+        self.device_server_url = device_server_url
 
         self.screenshot_path = f"verl-agent-androidenv-screenshot-worker-{self.worker_id}.jpg"
         self.last_obs_base64 = None
@@ -96,12 +32,18 @@ class MobiAgentWorker:
         self.grounder_client = OpenAI(api_key="0", base_url=self.grounder_url)
 
     def _get_obs(self):
-        response = requests.post(f"{self.adb_url}/execute_command/", json={
+        response = requests.post(f"{self.device_server_url}/execute_command/", json={
             "command": "screenshot",
             "parameters": {}
         })
 
-        img_base64 = response.json().get("result")
+        if response.status_code != 200:
+            raise RuntimeError("Failed to get screenshot from device server")
+        response_body = response.json()
+        if response_body.get("status") != "success":
+            raise RuntimeError(f"Device server returned error: {response_body.get('message', 'Unknown error')}")
+
+        img_base64 = response_body.get("data")
         
         img_bytes = base64.b64decode(img_base64)
         img = Image.open(io.BytesIO(img_bytes))
@@ -146,6 +88,7 @@ class MobiAgentWorker:
         done = False
 
         try:
+            print(action)
             action_type = action["action"]
             parameters = action["parameters"]
             reasoning = action["reasoning"]
@@ -175,11 +118,12 @@ class MobiAgentWorker:
             elif action_type == "done":
                 done = True
                 info["won"] = 1
+                reward = random.random()
             else:
-                logging.info(f"Unknown action type, skipping execution: {action_type}")
+                raise RuntimeError(f"Unknown action type: {action_type}")
 
             if request_body is not None:
-                requests.post(f"{self.adb_url}/execute_command/", json=request_body)
+                requests.post(f"{self.device_server_url}/execute_command/", json=request_body)
 
             time.sleep(2)
             
@@ -199,9 +143,9 @@ class MobiAgentWorker:
     def reset(self, task: dict[str, str]):
         # self.device = AndroidDevice(adb_endpoint=self.adb_endpoint)
         # self.device.app_start(task["package_name"])
-        requests.post(f"{self.adb_url}/execute_command/", json={
-            "command": "app_start",
-            "parameters": {"package_name": task["package_name"]}
+        requests.post(f"{self.device_server_url}/execute_command/", json={
+            "command": "start_app",
+            "parameters": {"app_name": task["app_name"]}
         })
         return self._get_obs(), {"task": task["description"]}
     
@@ -234,7 +178,7 @@ class MobiAgentMultiProcEnvs:
             seed: int,
             num_envs: int,
             group_n: int,
-            adb_urls: list[str],
+            device_server_urls: list[str],
             tasks: list[dict],
             grounder_url: str,
             resources_per_worker: dict,
@@ -245,12 +189,12 @@ class MobiAgentMultiProcEnvs:
         self.num_processes = num_envs * group_n
         self.num_envs = num_envs
         self.group_n = group_n
-        self.adb_urls = adb_urls
-        print(f"ADB URLs: {adb_urls}")
+        self.device_server_urls = device_server_urls
+        print(f"Device Server URLs: {device_server_urls}")
 
-        if len(adb_urls) != self.num_processes:
+        if len(device_server_urls) != self.num_processes:
             raise ValueError(
-                f'Number of adb_endpoints ({len(adb_urls)}) must match num_envs * group_n ({self.num_processes})',
+                f'Number of adb_endpoints ({len(device_server_urls)}) must match num_envs * group_n ({self.num_processes})',
             )
 
         # tasks: list of {"task_description": str, "package_name": str}
@@ -262,7 +206,7 @@ class MobiAgentMultiProcEnvs:
         env_worker = ray.remote(**resources_per_worker)(MobiAgentWorker)
         self.workers = []
         for i in range(self.num_processes):
-            worker = env_worker.remote(worker_id=str(i), grounder_url=grounder_url, adb_url=adb_urls[i])
+            worker = env_worker.remote(worker_id=str(i), grounder_url=grounder_url, device_server_url=device_server_urls[i])
             self.workers.append(worker)
 
     def step(self, actions: list[str]):
@@ -327,7 +271,7 @@ def build_mobiagent_envs(
     seed: int,
     env_num: int,
     group_n: int,
-    adb_urls: list[str],
+    device_server_urls: list[str],
     tasks: list[dict],
     grounder_url: str,
     resources_per_worker: dict,
@@ -336,7 +280,7 @@ def build_mobiagent_envs(
         seed=seed,
         num_envs=env_num,
         group_n=group_n,
-        adb_urls=adb_urls,
+        device_server_urls=device_server_urls,
         tasks=tasks,
         grounder_url=grounder_url,
         resources_per_worker=resources_per_worker
