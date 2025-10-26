@@ -222,9 +222,22 @@ def compute_timing_metrics(batch: DataProto, timing_raw: Dict[str, float]) -> Di
         **{name: num_overall_tokens for name in ["ref", "values", "adv", "update_critic", "update_actor"]},
     }
 
+    step_time = timing_raw["step"]
+    gen_time = timing_raw["gen"]
+    env_time = timing_raw["env"]
+    pure_rollout_time = gen_time - env_time
+    timing_raw["rollout"] = pure_rollout_time
+
+    rollout_ratio = pure_rollout_time / step_time
+    env_ratio = env_time / step_time
+    other_ratio = 1.0 - gen_time / step_time
+
     return {
         **{f"timing_s/{name}": value for name, value in timing_raw.items()},
         **{f"timing_per_token_ms/{name}": timing_raw[name] * 1000 / num_tokens_of_section[name] for name in set(num_tokens_of_section.keys()) & set(timing_raw.keys())},
+        "timing_s/rollout_ratio": rollout_ratio,
+        "timing_s/env_ratio": env_ratio,
+        "timing_s/other_ratio": other_ratio,
     }
 
 

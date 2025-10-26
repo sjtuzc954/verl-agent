@@ -8,6 +8,8 @@ train_data_size=1
 val_data_size=1
 group_size=2
 
+export WANDB_API_KEY=99cda89ed91858d1f8d1fd5a5c1cb96456077071
+
 # python3 -m examples.data_preprocess.prepare \
 #     --mode 'visual' \
 #     --train_data_size $train_data_size \
@@ -56,12 +58,12 @@ python3 -m verl.trainer.main_ppo \
     env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
     +env.extra_config_file=$HOME/modelarts/log/zc/verl-agent/config/mobiagent_config.json \
     trainer.critic_warmup=0 \
-    trainer.logger=['console'] \
-    trainer.project_name='verl_agent_mobiagent' \
-    trainer.experiment_name='grpo_v0' \
+    trainer.logger=['console','wandb'] \
+    trainer.project_name='verl-agent-MobiAgent' \
+    trainer.experiment_name='grpo_v0_4' \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \
     trainer.test_freq=-1 \
-    trainer.save_freq=1 \
-    trainer.total_epochs=1 \
+    trainer.save_freq=-1 \
+    trainer.total_epochs=25 \
     trainer.val_before_train=False $@

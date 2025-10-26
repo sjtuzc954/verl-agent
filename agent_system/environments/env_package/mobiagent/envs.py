@@ -114,7 +114,8 @@ class MobiAgentWorker:
                     "parameters": {"direction": parameters["direction"].lower()}
                 }
             elif action_type == "wait":
-                time.sleep(1)
+                # time.sleep(1)
+                pass
             elif action_type == "done":
                 done = True
                 info["won"] = 1
@@ -125,7 +126,7 @@ class MobiAgentWorker:
             if request_body is not None:
                 requests.post(f"{self.device_server_url}/execute_command/", json=request_body)
 
-            time.sleep(2)
+            time.sleep(1.5)
             
             obs = self._get_obs()
         except Exception as e:
