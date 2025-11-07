@@ -233,7 +233,13 @@ class RLHFDataset(Dataset):
         )
 
         if self.processor is not None and self.processor.image_processor.__class__.__name__ == "Qwen2VLImageProcessor":
-            from verl.models.transformers.qwen2_vl import get_rope_index
+            # from verl.models.transformers.qwen2_vl import get_rope_index
+
+            # qwen-vl mrope
+            if "Qwen3VLProcessor" in self.processor.__class__.__name__:
+                from verl.models.transformers.qwen3_vl import get_rope_index
+            else:
+                from verl.models.transformers.qwen2_vl import get_rope_index
 
             position_ids = [
                 get_rope_index(

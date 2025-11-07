@@ -1,6 +1,6 @@
 {
     "device_server_urls": {
-        "train": ["http://localhost:9000","http://localhost:9001"],
+        "train": ["http://localhost:6020","http://localhost:6021"],
         "val": []
     },
     "grounder_url": "http://123.60.91.241:8080/v1",
