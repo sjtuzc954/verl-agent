@@ -31,13 +31,15 @@ Unlike prior approaches that simply concatenate full interaction histories, `ver
 `verl-agent` provides a **diverse set of RL algorithms** (including our new algorithm GiGPO) and a **rich suite of agent environments**, enabling the development of reasoning agents in both visual and text-based tasks.
 
 # News
+- [2025.12] `Qwen3-VL` is supported! See example [here](./examples/gigpo_trainer/run_sokoban_qwen3vl.sh).
+- [2025.09] `GiGPO` is now supported by [ROLL](https://github.com/alibaba/ROLL)! [[Document](https://alibaba.github.io/ROLL/docs/English/UserGuide/agentic/agentic_GiGPO)] [[Train Curves](https://github.com/alibaba/ROLL/issues/173#issuecomment-3332106534)].
+- [2025.09] `verl-agent`-style training pipeline is now supported by [OpenManus-RL](https://github.com/OpenManus/OpenManus-RL)!
 - [2025.09] [GiGPO](https://arxiv.org/abs/2505.10978) accepted at [NeurIPS 2025](https://neurips.cc/)! 🎉🎉🎉
 - [2025.08] Add **Search-R1 experiments** and **similarity-based GiGPO**! Check out GiGPO's superior performance in Search-R1 experiments [here](#results).
 - [2025.07] `GiGPO` & `verl-agent` talks at [Agent for SWE meetup](https://lu.ma/e498qhsi) by LF AI & Data Singapore on 7/11.
 - [2025.07] Add modular memory manager. See [here](./agent_system/memory).
 - [2025.06] ***Major update***: Merge all features from the latest [veRL](https://github.com/volcengine/verl). For example, `verl-agent` now supports Qwen3, LoRA, REINFORCE++, and more. Feel free to explore!
-- [2025.05] Our paper on GiGPO released. See [link](https://arxiv.org/abs/2505.10978).
-- [2025.05] Code released.
+- [2025.05] Code released and paper on `GiGPO` released.
 
 # Quick Feature Summary
 | Feature Category | Supported Capabilities|
@@ -46,11 +48,11 @@ Unlike prior approaches that simply concatenate full interaction histories, `ver
 | **Memory**               | ✅ Fully customizable memory module<br>✅ Flexible history management|
 | **Input Flexibility**    | ✅ Fully customizable per-step input structures |
 | **Execution**            | ✅ Parallelized Gym environments<br>✅ Group environments support (for group-based RL)|
-| **Model Support**        | ✅ Qwen3<br>✅ Qwen2.5<br>✅ Qwen2.5-VL<br>✅ LLaMA3.2<br>and more |
+| **Model Support**        | ✅ Qwen3<br>✅ Qwen3-VL<br>✅ Qwen2.5<br>✅ Qwen2.5-VL<br>✅ LLaMA3.2<br>and more |
 | **Modality**             | ✅ Text-only<br>✅ Text + Image (multi-modal) |
 | **Lightweight Training** | ✅ Supports LoRA training |
 | **Environments**         | ✅ ALFWorld<br>✅ WebShop<br> ✅ Search (Tool Calling)<br> ✅ Sokoban<br>✅ Gym Cards<br>✅ AppWorld |
-| **RL Algorithms**        | ✅ GiGPO<br>✅ GRPO<br>✅ PPO<br>✅ DAPO<br>✅ RLOO<br>✅ REINFORCE++<br>✅ Dynamic sampling & clip-higher supported <br> and more |
+| **RL Algorithms**        | ✅ GiGPO<br>✅ GRPO<br>✅ PPO<br>✅ DAPO<br>✅ GSPO<br>✅ RLOO<br>✅ REINFORCE++<br>✅ Dynamic sampling & clip-higher supported <br> and more |
 | **Prompt-based Agent**   | ✅ GPT-4o prompt-based agent  |
 
 # Framework Comparison
@@ -82,7 +84,7 @@ Unlike prior approaches that simply concatenate full interaction histories, `ver
     - [6. GiGPO (dynamic)](#6-gigpo-dynamic)
   - [LoRA](#lora)
   - [Prompt-based Agent with GPT-4o](#prompt-based-agent-with-gpt-4o)
-- [Tips](#tips)
+- [FAQ](#faq)
   - [1. Customize Memory Module](#1-customize-memory-module)
   - [2. Data Preparation](#2-data-preparation)
   - [3. Customize Your Own Prompts](#3-customize-your-own-prompts)
@@ -113,7 +115,7 @@ Unlike prior approaches that simply concatenate full interaction histories, `ver
 
 - **Support for Various Models**
 
-  `verl-agent` supports a wide range of LLMs, including `Qwen3`, `Qwen2.5`, `LLaMA3.2`, `Qwen2.5-VL`, and others, allowing flexibility for various deployment needs.
+  `verl-agent` supports a wide range of LLMs, including `Qwen3`, `Qwen3-VL`, `Qwen2.5`, `LLaMA3.2`, `Qwen2.5-VL`, and others, allowing flexibility for various deployment needs.
 
 - **LoRA Fine-Tuning Support**
 
@@ -129,7 +131,7 @@ Unlike prior approaches that simply concatenate full interaction histories, `ver
 
 - **Diverse RL Algorithms**
 
-  `verl-agent` includes implementations of various RL algorithms, such as [GRPO](https://arxiv.org/abs/2402.03300), [PPO](https://arxiv.org/abs/1707.06347), [DAPO](https://arxiv.org/abs/2503.14476), [RLOO](https://arxiv.org/abs/2402.14740) and our new state-of-the-art algorithm [GiGPO](https://arxiv.org/abs/2505.10978). It also supports several variants enhanced with dynamic sampling and clip-higher techniques.
+  `verl-agent` includes implementations of various RL algorithms, such as [GRPO](https://arxiv.org/abs/2402.03300), [PPO](https://arxiv.org/abs/1707.06347), [DAPO](https://arxiv.org/abs/2503.14476), [GSPO](https://arxiv.org/abs/2507.18071), [RLOO](https://arxiv.org/abs/2402.14740) and our new state-of-the-art algorithm [GiGPO](https://arxiv.org/abs/2505.10978). It also supports several variants enhanced with dynamic sampling and clip-higher techniques.
 
 # Results
 > ⚠️ Note: The performance of GiGPO has improved slightly after the "[2025.06.03] Major Update." To reproduce the original paper results, please use the version released prior to the "[2025.06.03] Major Update."
@@ -213,12 +215,10 @@ We have released our models on [HuggingFace](https://huggingface.co/collections/
 conda create -n verl-agent python==3.12 -y
 conda activate verl-agent
 
-pip3 install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
-pip3 install flash-attn==2.7.4.post1 --no-build-isolation
+pip3 install vllm==0.11.0
 
-pip3 install -e .
-
-pip3 install vllm==0.8.5
+pip3 install flash-attn==2.7.4.post1 --no-build-isolation --no-cache-dir
+pip install -e .
 ```
 
 ## Install Supported Environments
@@ -231,7 +231,6 @@ Install with pip:
 pip3 install gymnasium==0.29.1
 pip3 install stable-baselines3==2.6.0
 pip install alfworld
-pip install vllm==0.8.5
 ```
 
 Download PDDL & Game files and pre-trained MaskRCNN detector (will be stored in `~/.cache/alfworld/`):
@@ -353,7 +352,6 @@ cd repo_root/
 pip install git+https://github.com/StonyBrookNLP/appworld.git
 appworld install
 pip install -e .
-pip install vllm==0.8.5
 ```
 You can ignore the warning of incompatibility for appworld, because we don't run appworld in `verl-agent` environment.
 
@@ -446,7 +444,7 @@ We also provide a prompt-based GPT-4o agent.
 bash examples/prompt_agent/run_gpt4o_agent.sh
 ```
 
-# Tips
+# FAQ
 
 ## 1. Customize Memory Module
 `verl-agent` supports a customizable and flexible memory system for managing and formatting interaction history between the agent and the environment. We provide a [SimpleMemory](./agent_system/memory/memory.py) implementation as a default starting point. This memory module is invoked within [env_manager.py](./agent_system/environments/env_manager.py) (i.e., `build_text_obs()`) to construct the observation at each step. 
@@ -454,7 +452,7 @@ bash examples/prompt_agent/run_gpt4o_agent.sh
 Developers are encouraged to extend this module with custom memory strategies, such as dynamic summarization, selective memory retention, or external knowledge integration, to improve the handling of long-horizon interaction histories.
 
 ## 2. Data Preparation
-For most environments (e.g., AFLWorld, WebShop), we only use data preparation to indicate the modality, either "text" or "visual". For example, if the task is purely text-based, the data will just be an empty string "". If it involves visual input, it will be "\<image\>". As for agent input (including task instruction, observation and prompt), we follow the classical RL pipeline. That means the input of LLM agent comes from the environment's feedback through `env.step()`. In the case of search-r1 experiments where tasks are drawn from a dataset, we leverage the env_kwargs parameter to pass tasks into the environment, using: `envs.reset(kwargs=gen_batch.non_tensor_batch.pop('env_kwargs', None))`.
+For most environments (e.g., AFLWorld, WebShop, Sokoban), we only use data preparation to indicate the modality, either "text" or "visual". For example, if the task is purely text-based, the data will just be an empty string "". If it involves visual input, it will be "\<image\>". As for agent input (including task instruction, observation and prompt), we follow the classical RL pipeline. That means the input of LLM agent comes from the environment's feedback through `env.step()`. In the case of search-r1 experiments where tasks are drawn from a dataset, we leverage the [env_kwargs](./examples/data_preprocess/preprocess_search_r1_dataset.py#L90) parameter to pass tasks into the environment, using: [envs.reset(kwargs=gen_batch.non_tensor_batch.pop('env_kwargs', None))](./agent_system/multi_turn_rollout/rollout_loop.py#L301).
 
 ## 3. Customize Your Own Prompts  
 We adopt a simple and minimal prompt format in our implementation. For example, in the WebShop environment:
@@ -492,15 +490,16 @@ Example contributions include:
 # Acknowledgement
 
 `verl-agent` codebase is built upon [veRL](https://github.com/volcengine/verl). 
-The supported environments are adapted from [ALFWorld](https://github.com/alfworld/alfworld), [Sokoban](https://github.com/mpSchrader/gym-sokoban), [SkyRL-Gym](https://github.com/NovaSky-AI/SkyRL/tree/main/skyrl-gym), [Search-R1](https://github.com/PeterGriffinJin/Search-R1), [Gym Cards](https://github.com/RL4VLM/RL4VLM/tree/main/gym-cards), [WebShop](https://github.com/princeton-nlp/WebShop), and [AppWorld](https://github.com/stonybrooknlp/appworld).
+The supported environments are adapted from [ALFWorld](https://github.com/alfworld/alfworld), [Sokoban](https://github.com/mpSchrader/gym-sokoban), [SkyRL-Gym](https://github.com/NovaSky-AI/SkyRL/tree/main/skyrl-gym), [Search-R1](https://github.com/PeterGriffinJin/Search-R1), [Gym Cards](https://github.com/RL4VLM/RL4VLM/tree/main/gym-cards), [WebShop](https://github.com/princeton-nlp/WebShop), and [AppWorld](https://github.com/stonybrooknlp/appworld). We extend our gratitude to the authors and contributors of these projects for their valuable work.
 
-We extend our gratitude to the authors and contributors of these projects for their valuable work.
+We would also like to thank the following contributors for their specific improvements to this project: WebShop bug fix ([@YSLIU627](https://github.com/YSLIU627)), GSPO support ([@MakeKJ](https://github.com/MakeKJ)), Qwen3-VL support ([@FabianSchuetze](https://github.com/FabianSchuetze)).
 
 # Awesome Work Powered by verl-agent & GiGPO
 
 - [OpenManus-RL](https://github.com/OpenManus/OpenManus-RL): An open-source framework for live-stream reinforcement learning tuning of LLM agents. [![[code]](https://img.shields.io/github/stars/OpenManus/OpenManus-RL)](https://github.com/OpenManus/OpenManus-RL)
 - [RLVMR](https://github.com/Tencent/DigitalHuman/tree/main/RLVMR): Providing agents with fine-grained meta-reasoning rewards in long-horizon tasks. [![[code]](https://img.shields.io/github/stars/Tencent/DigitalHuman)](https://github.com/Tencent/DigitalHuman/tree/main/RLVMR)
 - [UI-S1](https://github.com/X-PLUG/MobileAgent/tree/main/UI-S1): A GUI automation model using semi-online reinforcement learning for stable long-horizon task execution. [![[code]](https://img.shields.io/github/stars/X-PLUG/MobileAgent)](https://github.com/X-PLUG/MobileAgent/tree/main/UI-S1)
+- [Agent Learning via Early Experience](https://arxiv.org/pdf/2510.08558): A scalable, reward-free paradigm that bridges imitation learning and RL via implicit world modeling and self-reflection.
 
 
 # Citation

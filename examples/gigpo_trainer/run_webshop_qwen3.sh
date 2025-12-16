@@ -9,6 +9,7 @@ val_data_size=128
 group_size=8
 mode="mean_norm" # "mean_norm" or "mean_std_norm"
 
+# We only use data preparation to indicate the modality and the data size.
 python3 -m examples.data_preprocess.prepare \
     --mode 'text' \
     --train_data_size $train_data_size \
@@ -25,6 +26,7 @@ python3 -m verl.trainer.main_ppo \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
     data.return_raw_chat=True \
+    +data.apply_chat_template_kwargs.enable_thinking=False \
     actor_rollout_ref.model.path=Qwen/Qwen3-1.7B \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
@@ -44,8 +46,6 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.free_cache_engine=False \
     actor_rollout_ref.rollout.val_kwargs.temperature=0.4 \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=16 \
-    actor_rollout_ref.ref.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.use_invalid_action_penalty=True \
     actor_rollout_ref.actor.invalid_action_penalty_coef=0.1 \
     algorithm.use_kl_in_reward=False \

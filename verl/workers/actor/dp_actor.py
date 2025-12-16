@@ -18,6 +18,7 @@ Single Process Actor
 """
 
 import itertools
+import time
 import logging
 import os
 from typing import Tuple
@@ -28,7 +29,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
 import verl.utils.torch_functional as verl_F
 from verl import DataProto
-from verl.trainer.ppo.core_algos import agg_loss, compute_policy_loss, kl_penalty
+from verl.trainer.ppo.core_algos import agg_loss, compute_policy_loss, compute_policy_loss_gspo, kl_penalty
 from verl.utils.debug import GPUMemoryLogger
 from verl.utils.device import get_device_name, get_torch_device, is_cuda_available, is_npu_available
 from verl.utils.fsdp_utils import FSDPModule, fsdp2_clip_grad_norm_
@@ -91,7 +92,7 @@ class DataParallelPPOActor(BasePPOActor):
             position_ids = micro_batch["position_ids"]
             entropy = None
             if position_ids.dim() == 3:  # qwen2vl mrope
-                position_ids = position_ids.transpose(0, 1)  # (bsz, 3, seqlen) -> (3, bsz, seqlen)
+                position_ids = position_ids.transpose(0, 1)  # (bsz, 4, seqlen) -> (4, bsz, seqlen)
 
             if self.use_remove_padding:
                 input_ids_rmpad, indices, *_ = unpad_input(input_ids.unsqueeze(-1), attention_mask)  # input_ids_rmpad (total_nnz, ...)
@@ -99,7 +100,7 @@ class DataParallelPPOActor(BasePPOActor):
 
                 # unpad the position_ids to align the rotary
                 if position_ids.dim() == 3:
-                    position_ids_rmpad = index_first_axis(rearrange(position_ids, "c b s ... -> (b s) c ..."), indices).transpose(0, 1).unsqueeze(1)  # (3, bsz, seqlen) -> (3, 1, bsz * seqlen)
+                    position_ids_rmpad = index_first_axis(rearrange(position_ids, "c b s ... -> (b s) c ..."), indices).transpose(0, 1).unsqueeze(1)  # (4, bsz, seqlen) -> (4, 1, bsz * seqlen)
                 else:
                     position_ids_rmpad = index_first_axis(rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(0, 1)
 
@@ -134,6 +135,7 @@ class DataParallelPPOActor(BasePPOActor):
                 extra_args = {}
                 if self.use_fused_kernels:
                     extra_args["temperature"] = temperature
+                    extra_args["return_dict"] = True
 
                 output = self.actor_module(
                     input_ids=input_ids_rmpad,
@@ -147,7 +149,6 @@ class DataParallelPPOActor(BasePPOActor):
                 if self.use_fused_kernels:
                     log_probs = output.log_probs.squeeze(0)  # (total_nnz,)
                     entropy_rmpad = output.entropy.squeeze(0)  # (total_nnz,)
-
                 else:
                     logits_rmpad = output.logits.squeeze(0)  # (total_nnz, vocab_size)
                     logits_rmpad.div_(temperature)
@@ -385,8 +386,16 @@ class DataParallelPPOActor(BasePPOActor):
                     if entropy_coeff != 0:
                         calculate_entropy = True
                     entropy, log_prob = self._forward_micro_batch(micro_batch=data, temperature=temperature, calculate_entropy=calculate_entropy)
+                    
+                    loss_mode = self.config.policy_loss.get("loss_mode", "vanilla")
+                    if loss_mode == "vanilla":
+                        policy_loss_fn = compute_policy_loss
+                    elif loss_mode == "gspo":
+                        policy_loss_fn = compute_policy_loss_gspo
+                    else:
+                        raise ValueError(f"Unsupported loss_mode: {loss_mode}")
 
-                    pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = compute_policy_loss(
+                    pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(
                         old_log_prob=old_log_prob,
                         log_prob=log_prob,
                         advantages=advantages,

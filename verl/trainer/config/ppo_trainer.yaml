@@ -19,6 +19,7 @@ data:
   image_key: images
   video_key: videos
   trust_remote_code: False  # main_ppo will check this config to determine whether to use remote code for tokenizer
+  apply_chat_template_kwargs: {}
   custom_cls:
       path: null
       name: null
@@ -63,6 +64,8 @@ actor_rollout_ref:
     ppo_epochs: 1
     shuffle: False
     ulysses_sequence_parallel_size: 1 # sp size
+    policy_loss:
+      loss_mode: "vanilla"
     checkpoint:
       contents: ['model', 'optimizer', 'extra']  # with 'hf_model' you can save whole model as hf format, now only use sharded model checkpoint to save space
     optim:
@@ -270,6 +273,7 @@ trainer:
   resume_mode: auto # or disable or resume_path if resume_from_path is set
   resume_from_path: null
   val_before_train: True
+  val_only: False
   test_freq: -1
   critic_warmup: 0
   default_hdfs_dir: null
@@ -295,6 +299,8 @@ env:
     num_gpus: 0
   rollout:
     n: 1 # the group number of envs (for GRPO and GiGPO).
+  alfworld:
+    eval_dataset: eval_in_distribution
   search:
     log_requests: false
     search_url: "http://127.0.0.1:8000/retrieve" # also support multiple urls: ["http://127.0.0.1:8000/retrieve", "http://127.0.0.1:8001/retrieve"]
