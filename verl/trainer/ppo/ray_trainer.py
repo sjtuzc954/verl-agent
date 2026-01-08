@@ -1298,9 +1298,32 @@ class RayPPOTrainer:
                 # TODO: make a canonical logger that supports various backend
                 logger.log(data=metrics, step=self.global_steps)
 
+                # debug only
+                # self._log_response_adv(batch)
+
                 progress_bar.update(1)
                 self.global_steps += 1
                 if is_last_step:
                     pprint(f"Final validation metrics: {last_val_metrics}")
                     progress_bar.close()
                     return
+
+    def _log_response_adv(self, batch: DataProto):
+        # log the response-level advantage, only for debugging
+        for i in range(len(batch)):
+            data_item = batch[i]  # DataProtoItem
+
+            adv = data_item.batch["advantages"]
+
+            prompt_ids = data_item.batch['prompts']
+
+            prompt_length = prompt_ids.shape[-1]
+
+            response_ids = data_item.batch['responses']
+            valid_response_length = data_item.batch['attention_mask'][prompt_length:].sum()
+            valid_response_ids = response_ids[:valid_response_length]
+
+            response_str = self.tokenizer.decode(valid_response_ids, skip_special_tokens=False)
+
+            response_adv = adv[0].item()
+            print(f"Response: {response_str}, Advantage: {response_adv}")

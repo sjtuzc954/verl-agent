@@ -146,8 +146,9 @@ class MobiAgentWorker:
 
         step_idx = len(self.traj)
         try:
+            print(f"Worker {self.worker_id}, step {step_idx}, raw action: {action}")
+            
             action = json.loads(action)
-            print(f"Worker {self.worker_id}, step {step_idx}: {action}")
 
             action_type = action["action"]
             if action_type not in ["click", "input", "swipe", "wait", "done"]:
@@ -215,7 +216,7 @@ class MobiAgentWorker:
             time.sleep(1.5)
 
             obs = self._get_obs()
-        except json.JSONDecodeError | InvalidActionError | KeyError:
+        except (json.decoder.JSONDecodeError, InvalidActionError, KeyError):
             reward = -1.0
             done = True
             obs = np.array(self.last_obs) if self.last_obs else None

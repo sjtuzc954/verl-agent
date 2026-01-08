@@ -56,9 +56,9 @@ python3 -m verl.trainer.main_ppo \
     env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
     reward_model.reward_manager=process \
     trainer.critic_warmup=0 \
-    trainer.logger=['console'] \
+    trainer.logger=['console','wandb'] \
     trainer.project_name='verl-agent-MobiAgent' \
-    trainer.experiment_name='grpo_qwen3_e2e_v0_1' \
+    trainer.experiment_name='grpo_qwen3_e2e_prm_v0_0' \
     trainer.n_gpus_per_node=4 \
     trainer.nnodes=1 \
     trainer.test_freq=-1 \
