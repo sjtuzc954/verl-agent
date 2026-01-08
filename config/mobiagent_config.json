@@ -1,9 +1,10 @@
 {
+    "use_e2e": true,
+    "use_rel_coords": true,
     "device_server_urls": {
         "train": ["http://localhost:9000","http://localhost:9001"],
         "val": []
     },
-    "grounder_url": "http://123.60.91.241:8080/v1",
     "tasks": {
         "train": [
             {

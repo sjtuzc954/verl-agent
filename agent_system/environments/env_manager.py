@@ -642,7 +642,10 @@ class MobiAgentEnvironmentManager(EnvironmentManagerBase):
         text_obs = []
         memory_contexts = self.memory.fetch(action_key="action")
         for i in range(len(self.memory)):
-            obs = DECIDER_PROMPT.format(task=self.tasks[i], history=memory_contexts[i])
+            if self.envs.use_e2e:
+                obs = E2E_PROMPT.format(task=self.tasks[i], history=memory_contexts[i])
+            else:
+                obs = DECIDER_PROMPT.format(task=self.tasks[i], history=memory_contexts[i])
             text_obs.append(obs)
         return text_obs
 
@@ -757,8 +760,18 @@ def make_envs(config):
             val_tasks = extra_config["tasks"]["val"]
             train_device_server_urls = extra_config["device_server_urls"]["train"]
             val_device_server_urls = extra_config["device_server_urls"]["val"]
-            grounder_url = extra_config["grounder_url"]
-        _envs = build_mobiagent_envs(seed=config.env.seed, env_num=config.data.train_batch_size, group_n=group_n, device_server_urls=train_device_server_urls, tasks=train_tasks, grounder_url=grounder_url, resources_per_worker=resources_per_worker)
+            grounder_url = extra_config.get("grounder_url", None)
+            use_rel_coords = extra_config.get("use_rel_coords", False)
+            use_e2e = extra_config.get("use_e2e", False)
+        
+        train_env_kwargs = {
+            "device_server_urls": train_device_server_urls,
+            "tasks": train_tasks,
+            "grounder_url": grounder_url,
+            "use_rel_coords": use_rel_coords,
+            "use_e2e": use_e2e
+        }
+        _envs = build_mobiagent_envs(seed=config.env.seed, env_num=config.data.train_batch_size, group_n=group_n, resources_per_worker=resources_per_worker, env_kwargs=train_env_kwargs)
         
         projection_f = mobiagent_projection
         envs = MobiAgentEnvironmentManager(_envs, projection_f, config)
@@ -766,7 +779,10 @@ def make_envs(config):
         if len(val_device_server_urls) == 0:
             val_envs = None
         else:
-            _val_envs = build_mobiagent_envs(seed=config.env.seed + 1000, env_num=config.data.val_batch_size, group_n=1, device_server_urls=val_device_server_urls, tasks=val_tasks, grounder_url=grounder_url, resources_per_worker=resources_per_worker)
+            val_env_kwargs = train_env_kwargs.copy()
+            val_env_kwargs["device_server_urls"] = val_device_server_urls
+            val_env_kwargs["tasks"] = val_tasks
+            _val_envs = build_mobiagent_envs(seed=config.env.seed + 1000, env_num=config.data.val_batch_size, group_n=1, resources_per_worker=resources_per_worker, env_kwargs=val_env_kwargs)
             val_envs = MobiAgentEnvironmentManager(_val_envs, projection_f, config)
         
         return envs, val_envs

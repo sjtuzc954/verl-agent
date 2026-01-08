@@ -10,10 +10,10 @@ group_size=2
 
 export WANDB_API_KEY=99cda89ed91858d1f8d1fd5a5c1cb96456077071
 
-# python3 -m examples.data_preprocess.prepare \
-#     --mode 'visual' \
-#     --train_data_size $train_data_size \
-#     --val_data_size $val_data_size
+python3 -m examples.data_preprocess.prepare \
+    --mode 'visual' \
+    --train_data_size $train_data_size \
+    --val_data_size $val_data_size
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
@@ -26,7 +26,7 @@ python3 -m verl.trainer.main_ppo \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
     data.return_raw_chat=True \
-    actor_rollout_ref.model.path=$HOME/modelarts/log/models/MobiMind-Mixed-7B \
+    actor_rollout_ref.model.path=$HOME/modelarts/user-job-dir/code2/models/mobimind/v9.1/mixed-4b-0.5 \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=8 \
@@ -56,14 +56,14 @@ python3 -m verl.trainer.main_ppo \
     env.max_steps=20 \
     env.rollout.n=$group_size \
     env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
-    +env.extra_config_file=$HOME/modelarts/log/zc/verl-agent/config/mobiagent_config.json \
+    +env.extra_config_file=config/mobiagent_config.json \
     trainer.critic_warmup=0 \
     trainer.logger=['console','wandb'] \
     trainer.project_name='verl-agent-MobiAgent' \
-    trainer.experiment_name='grpo_v0_4' \
-    trainer.n_gpus_per_node=8 \
+    trainer.experiment_name='grpo_qwen3_e2e_v0_1' \
+    trainer.n_gpus_per_node=4 \
     trainer.nnodes=1 \
     trainer.test_freq=-1 \
     trainer.save_freq=-1 \
-    trainer.total_epochs=25 \
+    trainer.total_epochs=5 \
     trainer.val_before_train=False $@

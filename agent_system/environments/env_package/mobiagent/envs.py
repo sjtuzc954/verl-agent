@@ -21,16 +21,20 @@ RESIZE_FACTOR = 0.5  # Resize factor for screenshots to reduce size
 
 class MobiAgentWorker:
 
-    def __init__(self, worker_id: str, grounder_url: str, device_server_url: str = None):
+    def __init__(self, worker_id: str, grounder_url: str = None, device_server_url: str = None, use_rel_coords: bool = False, use_e2e: bool = False):
         self.worker_id = worker_id
         self.grounder_url = grounder_url
         self.device_server_url = device_server_url
+        self.use_rel_coords = use_rel_coords
+        self.use_e2e = use_e2e
 
         self.screenshot_path = f"verl-agent-androidenv-screenshot-worker-{self.worker_id}.jpg"
         self.last_obs_base64 = None
-
-        self.grounder_client = OpenAI(api_key="0", base_url=self.grounder_url)
-
+        if self.grounder_url is not None and (not self.use_e2e):
+            self.grounder_client = OpenAI(api_key="0", base_url=self.grounder_url)
+        else:
+            self.grounder_client = None
+        
     def _get_obs(self):
         response = requests.post(f"{self.device_server_url}/execute_command/", json={
             "command": "screenshot",
@@ -77,6 +81,9 @@ class MobiAgentWorker:
         grounder_response = json.loads(grounder_response_str)
         x1, y1, x2, y2 = grounder_response["bbox"]
         x, y = (x1 + x2) // 2, (y1 + y2) // 2
+        if self.use_rel_coords:
+            x = int(x / 1000 * self.last_obs.width)
+            y = int(y / 1000 * self.last_obs.height)
         # scale back to original size
         x, y = int(x / RESIZE_FACTOR), int(y / RESIZE_FACTOR)
         return x, y
@@ -96,7 +103,16 @@ class MobiAgentWorker:
             request_body = None
             if action_type == "click":
                 target_element = parameters["target_element"]
-                x, y = self._call_grounder(reasoning, target_element)
+                if self.grounder_client is not None and (not self.use_e2e):
+                    x, y = self._call_grounder(reasoning, target_element)
+                elif self.use_e2e and "bbox" in parameters:
+                    bbox = parameters["bbox"]
+                    x, y = (bbox[0] + bbox[2]) // 2, (bbox[1] + bbox[3]) // 2
+                    if self.use_rel_coords:
+                        x = int(x / 1000 * self.last_obs.width / RESIZE_FACTOR)
+                        y = int(y / 1000 * self.last_obs.height / RESIZE_FACTOR)
+                else:
+                    raise ValueError(f"Invalid click action: {action}")
                 request_body = {
                     "command": "click",
                     "parameters": {"x": x, "y": y}
@@ -179,10 +195,12 @@ class MobiAgentMultiProcEnvs:
             seed: int,
             num_envs: int,
             group_n: int,
+            resources_per_worker: dict,
             device_server_urls: list[str],
             tasks: list[dict],
             grounder_url: str,
-            resources_per_worker: dict,
+            use_rel_coords: bool,
+            use_e2e: bool = False,
         ):
         if not ray.is_initialized():
             ray.init()
@@ -201,13 +219,20 @@ class MobiAgentMultiProcEnvs:
         # tasks: list of {"task_description": str, "package_name": str}
         self.tasks = tasks
         self.grounder_url = grounder_url
-
+        self.use_rel_coords = use_rel_coords
+        self.use_e2e = use_e2e
         self.picker = NonRepeatingRandomPicker(np.random.RandomState(seed), self.tasks)
 
         env_worker = ray.remote(**resources_per_worker)(MobiAgentWorker)
         self.workers = []
         for i in range(self.num_processes):
-            worker = env_worker.remote(worker_id=str(i), grounder_url=grounder_url, device_server_url=device_server_urls[i])
+            worker = env_worker.remote(
+                worker_id=str(i), 
+                grounder_url=grounder_url, 
+                device_server_url=device_server_urls[i], 
+                use_rel_coords=self.use_rel_coords,
+                use_e2e=self.use_e2e
+            )
             self.workers.append(worker)
 
     def step(self, actions: list[str]):
@@ -272,17 +297,22 @@ def build_mobiagent_envs(
     seed: int,
     env_num: int,
     group_n: int,
-    device_server_urls: list[str],
-    tasks: list[dict],
-    grounder_url: str,
     resources_per_worker: dict,
+    env_kwargs: dict,
 ):
+    device_server_urls = env_kwargs["device_server_urls"]
+    tasks = env_kwargs["tasks"]
+    grounder_url = env_kwargs.get("grounder_url", None)
+    use_rel_coords = env_kwargs.get("use_rel_coords", False)
+    use_e2e = env_kwargs.get("use_e2e", False)
     return MobiAgentMultiProcEnvs(
         seed=seed,
         num_envs=env_num,
         group_n=group_n,
+        resources_per_worker=resources_per_worker,
         device_server_urls=device_server_urls,
         tasks=tasks,
         grounder_url=grounder_url,
-        resources_per_worker=resources_per_worker
+        use_rel_coords=use_rel_coords,
+        use_e2e=use_e2e
     )
