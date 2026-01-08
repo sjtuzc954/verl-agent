@@ -8,8 +8,6 @@ train_data_size=1
 val_data_size=1
 group_size=2
 
-export WANDB_API_KEY=99cda89ed91858d1f8d1fd5a5c1cb96456077071
-
 python3 -m examples.data_preprocess.prepare \
     --mode 'visual' \
     --train_data_size $train_data_size \
@@ -26,10 +24,10 @@ python3 -m verl.trainer.main_ppo \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
     data.return_raw_chat=True \
-    actor_rollout_ref.model.path=$HOME/modelarts/user-job-dir/code2/models/mobimind/v9.1/mixed-4b-0.5 \
+    actor_rollout_ref.model.path=$HOME/modelarts/user-job-dir/code2/models/mobimind/v9.6/MobiMind-1.5-4B \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
-    actor_rollout_ref.actor.ppo_mini_batch_size=8 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=4 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.actor.use_kl_loss=True \
     actor_rollout_ref.actor.kl_loss_coef=0.01 \
@@ -45,7 +43,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.max_num_batched_tokens=4096 \
     actor_rollout_ref.rollout.max_model_len=4096 \
     actor_rollout_ref.rollout.free_cache_engine=True \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.use_invalid_action_penalty=True \
@@ -53,12 +51,12 @@ python3 -m verl.trainer.main_ppo \
     algorithm.use_kl_in_reward=False \
     env.env_name=MobiAgent \
     env.seed=0 \
-    env.max_steps=20 \
+    env.max_steps=16 \
     env.rollout.n=$group_size \
     env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
-    +env.extra_config_file=config/mobiagent_config.json \
+    reward_model.reward_manager=process \
     trainer.critic_warmup=0 \
-    trainer.logger=['console','wandb'] \
+    trainer.logger=['console'] \
     trainer.project_name='verl-agent-MobiAgent' \
     trainer.experiment_name='grpo_qwen3_e2e_v0_1' \
     trainer.n_gpus_per_node=4 \

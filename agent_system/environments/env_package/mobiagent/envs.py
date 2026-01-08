@@ -12,16 +12,51 @@ import json
 import traceback
 import numpy as np
 import requests
-import random
+import os
+from functools import wraps
 
-from agent_system.environments.prompts import GROUNDER_PROMPT
+from agent_system.environments.prompts import GROUNDER_PROMPT, REWARD_PROMPT, IDENTIFY_FAIL_ACTION_PROMPT, FOLLOW_UP_IDENTIFY_STEP_PROMPT
 
 RESIZE_FACTOR = 0.5  # Resize factor for screenshots to reduce size
 
+def retry(max_attempts=3):
+    """
+    Decorator that retries a function up to max_attempts times
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    result = func(*args, **kwargs)
+                    return result
+                except Exception as e:
+                    print(f"{func.__name__} failed with error: {e}")
+
+                if attempt < max_attempts:
+                    print(f"retrying... (attempt {attempt}/{max_attempts})")
+                
+            print(f"{func.__name__} failed after {max_attempts} attempts")
+            return None
+        return wrapper
+    return decorator
+
+class InvalidActionError(RuntimeError):
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(self.message)
 
 class MobiAgentWorker:
 
-    def __init__(self, worker_id: str, grounder_url: str = None, device_server_url: str = None, use_rel_coords: bool = False, use_e2e: bool = False):
+    def __init__(
+        self, 
+        worker_id: str, 
+        grounder_url: str = None, 
+        device_server_url: str = None,
+        use_rel_coords: bool = False, 
+        use_e2e: bool = False,
+        reward_kwargs: dict = {}
+    ):
         self.worker_id = worker_id
         self.grounder_url = grounder_url
         self.device_server_url = device_server_url
@@ -34,6 +69,17 @@ class MobiAgentWorker:
             self.grounder_client = OpenAI(api_key="0", base_url=self.grounder_url)
         else:
             self.grounder_client = None
+        
+        os.environ["http_proxy"] = "http://127.0.0.1:7897"
+        os.environ["https_proxy"] = "http://127.0.0.1:7897"
+        os.environ["no_proxy"] = "localhost,127.0.0.1"
+        self.reward_model = reward_kwargs.pop("model")
+        self.reward_client = OpenAI(**reward_kwargs)
+
+        self.is_done = False
+        self.traj = []
+        self.current_task = None
+        self.last_obs = None
         
     def _get_obs(self):
         response = requests.post(f"{self.device_server_url}/execute_command/", json={
@@ -88,19 +134,32 @@ class MobiAgentWorker:
         x, y = int(x / RESIZE_FACTOR), int(y / RESIZE_FACTOR)
         return x, y
 
-    def step(self, action: dict[str, Any]):
+    def step(self, action: str):
         # device = self.device
         reward = 0.0
         info = {"status": "ok", "won": 0}
         done = False
+        
+        if self.is_done:
+            obs = np.array(self.last_obs) if self.last_obs else None
+            return obs, reward, True, info
 
+        step_idx = len(self.traj)
         try:
-            print(action)
+            action = json.loads(action)
+            print(f"Worker {self.worker_id}, step {step_idx}: {action}")
+
             action_type = action["action"]
+            if action_type not in ["click", "input", "swipe", "wait", "done"]:
+                raise InvalidActionError(f"Unknown action type: {action_type}")
+
             parameters = action["parameters"]
             reasoning = action["reasoning"]
 
+            self.traj.append([self.last_obs, action])
+
             request_body = None
+
             if action_type == "click":
                 target_element = parameters["target_element"]
                 if self.grounder_client is not None and (not self.use_e2e):
@@ -112,7 +171,7 @@ class MobiAgentWorker:
                         x = int(x / 1000 * self.last_obs.width / RESIZE_FACTOR)
                         y = int(y / 1000 * self.last_obs.height / RESIZE_FACTOR)
                 else:
-                    raise ValueError(f"Invalid click action: {action}")
+                    raise InvalidActionError(f"Invalid click action: {action}")
                 request_body = {
                     "command": "click",
                     "parameters": {"x": x, "y": y}
@@ -134,25 +193,162 @@ class MobiAgentWorker:
                 pass
             elif action_type == "done":
                 done = True
-                info["won"] = 1
-                reward = random.random()
-            else:
-                raise RuntimeError(f"Unknown action type: {action_type}")
+                self.is_done = True
+                if parameters.get("status", "success") == "success":
+                    # _get_reward now handles both reward evaluation and failed step identification
+                    reward, failed_step = self._get_reward()
+                else:
+                    reward = 0.0
+                    failed_step = None
+                
+                info["won"] = reward == 1.0
+                
+                # If the task failed and we identified the failed step
+                if failed_step is not None:
+                    # Convert to 0-indexed for trajectory access
+                    info["failed_step_idx"] = failed_step - 1
+                    print(f"Identified failed step: {failed_step}, {self.traj[failed_step - 1][1]}")
 
             if request_body is not None:
                 requests.post(f"{self.device_server_url}/execute_command/", json=request_body)
 
             time.sleep(1.5)
-            
+
             obs = self._get_obs()
-        except Exception as e:
+        except json.JSONDecodeError | InvalidActionError | KeyError:
             reward = -1.0
             done = True
-            obs = None
-            info = {"status": "error", "error": traceback.format_exc(), "won": 0}
+            obs = np.array(self.last_obs) if self.last_obs else None
+            info = {"status": "error", "error": traceback.format_exc(), "won": 0, "failed_step_idx": step_idx}
+            self.is_done = True
 
-        # TODO: how to assign reward?
         return obs, reward, done, info
+
+    def _build_trajectory_message(self):
+        """
+        Build trajectory message content for LLM evaluation.
+        Returns:
+            A list of message content items containing screenshots and actions (without prompt).
+        """
+        message_content = []
+        
+        # Add trajectory: each step contains [screenshot: PIL.Image, action: dict]
+        texts = []
+        for i, (screenshot, action) in enumerate(self.traj):
+            # Add screenshot
+            buffer = io.BytesIO()
+            screenshot.save(buffer, format="JPEG")
+            screenshot_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            message_content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{screenshot_base64}"}
+            })
+            
+            # Add action description as text
+            action_text = f"Step {i+1} - Action: {action['action']}"
+            if action['parameters']:
+                action_text += f", Parameters: {action['parameters']}"
+            action_text += f", Reasoning: {action['reasoning']}"
+            
+            message_content.append({
+                "type": "text",
+                "text": action_text
+            })
+
+            texts.append(action_text)
+
+        print(f"Trajectory texts: \n{'\n'.join(texts)}")
+        
+        return message_content
+
+    @retry(max_attempts=3)
+    def _get_reward(self):
+        """
+        Use LLM as judge to evaluate if the task was successfully completed.
+        If failed, continues the conversation to identify the failed step.
+        
+        Returns (reward, failed_step) where:
+        - reward: 1.0 if successful (Choice A), 0.0 if not successful (Choice B)
+        - failed_step: 1-indexed step number that caused failure, or None if task succeeded
+        """        
+        # Build the reward prompt with task description
+        reward_prompt = REWARD_PROMPT.format(task=self.current_task)
+        
+        # Build trajectory message content
+        trajectory_content = self._build_trajectory_message()
+        
+        # Prepend prompt to trajectory
+        message_content = [{"type": "text", "text": reward_prompt}] + trajectory_content
+        
+        # First round: evaluate task success
+        messages = [
+            {
+                "role": "user",
+                "content": message_content
+            }
+        ]
+        
+        response = self.reward_client.chat.completions.create(
+            model=self.reward_model,
+            messages=messages
+        )
+        
+        # Parse the response
+        reward_output = response.choices[0].message.content
+        print(f"Reward output:\n{reward_output}")
+        
+        # Parse the output to extract the choice
+        # Expected format:
+        # Thought: ...
+        # Choice: A or B
+        reward_output_clean = reward_output.replace("```", "")
+        lines = reward_output_clean.strip().split('\n')
+        choice = None
+        for line in lines:
+            if line.startswith("Choice:"):
+                choice_str = line.split(":", 1)[1].strip()
+                choice = choice_str.strip().upper()
+                break
+        
+        if choice == "A":
+            return 1.0, None
+        elif choice == "B":
+            # Second round: identify failed step using multi-turn conversation
+            messages.append({
+                "role": "assistant",
+                "content": reward_output
+            })
+            messages.append({
+                "role": "user",
+                "content": FOLLOW_UP_IDENTIFY_STEP_PROMPT
+            })
+            
+            response = self.reward_client.chat.completions.create(
+                model=self.reward_model,
+                messages=messages
+            )
+            
+            fail_output = response.choices[0].message.content
+            print(f"Fail step identification output:\n{fail_output}")
+            
+            # Parse the output to extract the failed step
+            # Expected format:
+            # Thought: ...
+            # Failed Step: [number]
+            lines = fail_output.replace("```", "").strip().split('\n')
+            failed_step = None
+            for line in lines:
+                if line.startswith("Failed Step:"):
+                    step_str = line.split(":", 1)[1].strip()
+                    failed_step = int(step_str)
+                    break
+            
+            if failed_step is None or failed_step < 1 or failed_step > len(self.traj):
+                raise ValueError(f"Invalid failed step: {failed_step}, Trajectory length: {len(self.traj)}")
+            
+            return 0.0, failed_step
+        else:
+            raise ValueError(f"Invalid choice: {choice}, Reward output: {reward_output}")
 
     def close(self):
         pass
@@ -160,10 +356,17 @@ class MobiAgentWorker:
     def reset(self, task: dict[str, str]):
         # self.device = AndroidDevice(adb_endpoint=self.adb_endpoint)
         # self.device.app_start(task["package_name"])
+        self.is_done = False
+        self.traj = []
+        self.last_obs = None
+
         requests.post(f"{self.device_server_url}/execute_command/", json={
             "command": "start_app",
             "parameters": {"app_name": task["app_name"]}
         })
+
+        self.current_task = task["description"]
+
         return self._get_obs(), {"task": task["description"]}
     
 class NonRepeatingRandomPicker:
@@ -201,6 +404,7 @@ class MobiAgentMultiProcEnvs:
             grounder_url: str,
             use_rel_coords: bool,
             use_e2e: bool = False,
+            reward_kwargs: dict = {}
         ):
         if not ray.is_initialized():
             ray.init()
@@ -231,7 +435,8 @@ class MobiAgentMultiProcEnvs:
                 grounder_url=grounder_url, 
                 device_server_url=device_server_urls[i], 
                 use_rel_coords=self.use_rel_coords,
-                use_e2e=self.use_e2e
+                use_e2e=self.use_e2e,
+                reward_kwargs=reward_kwargs
             )
             self.workers.append(worker)
 
@@ -305,6 +510,11 @@ def build_mobiagent_envs(
     grounder_url = env_kwargs.get("grounder_url", None)
     use_rel_coords = env_kwargs.get("use_rel_coords", False)
     use_e2e = env_kwargs.get("use_e2e", False)
+    reward_kwargs = {
+        "model": env_kwargs.get("reward_model", None),
+        "api_key": env_kwargs.get("reward_api_key", None),
+        "base_url": env_kwargs.get("reward_base_url", None)
+    }
     return MobiAgentMultiProcEnvs(
         seed=seed,
         num_envs=env_num,
@@ -314,5 +524,6 @@ def build_mobiagent_envs(
         tasks=tasks,
         grounder_url=grounder_url,
         use_rel_coords=use_rel_coords,
-        use_e2e=use_e2e
+        use_e2e=use_e2e,
+        reward_kwargs=reward_kwargs
     )

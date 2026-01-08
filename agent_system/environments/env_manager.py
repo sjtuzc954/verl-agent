@@ -606,6 +606,59 @@ class MobiAgentEnvironmentManager(EnvironmentManagerBase):
         self.memory = MobiAgentMemory()
         super().__init__(envs, projection_f, config)
 
+    def success_evaluator(self, *args, **kwargs) -> Dict[str, np.ndarray]:
+        """
+        hack this for reward shaping
+        """
+        total_infos = kwargs['total_infos']
+        total_batch_list = kwargs['total_batch_list']
+        total_episode_rewards = kwargs['episode_rewards']
+        batch_size = len(total_batch_list)
+        
+        success = defaultdict(list)
+        
+        for bs in range(batch_size):
+            failed_step_idx = None
+            for i in reversed(range(len(total_batch_list[bs]))):
+                batch_item = total_batch_list[bs][i]
+                if batch_item['active_masks']:
+                    info = total_infos[bs][i]
+                    won_value = float(info['won'])
+                    failed_step_idx = info.get('failed_step_idx', None)
+                    success['success_rate'].append(won_value)
+                    break
+            for i in range(len(total_batch_list[bs])):
+                batch_item = total_batch_list[bs][i]
+                if not batch_item['active_masks']:
+                    break
+                if failed_step_idx is not None:
+                    # a failed trajectory
+                    if i < failed_step_idx:
+                        batch_item['rewards'] = 1.0
+                    elif i == failed_step_idx:
+                        batch_item['rewards'] = 0.0
+                    else:
+                        # mask it (not trained)
+                        batch_item['active_masks'] = False
+                else:
+                    # 0 reward for step limit exceed
+                    # 1 reward for successful trajectories
+                    batch_item['rewards'] = total_episode_rewards[bs]
+        
+        # recompute episode rewards
+        for bs in range(batch_size):
+            total_episode_reward = 0.0
+            for i in range(len(total_batch_list[bs])):
+                batch_item = total_batch_list[bs][i]
+                if not batch_item['active_masks']:
+                    break
+                total_episode_reward += batch_item['rewards']
+            total_episode_rewards[bs] = total_episode_reward
+        
+        assert len(success['success_rate']) == batch_size
+
+        return {key: np.array(value) for key, value in success.items()}
+    
     def reset(self, kwargs) -> Dict[str, Any]:
         img_obs, infos = self.envs.reset()
         self.tasks = [info['task'] for info in infos]
@@ -627,7 +680,7 @@ class MobiAgentEnvironmentManager(EnvironmentManagerBase):
         next_observations = {
             'text': self.build_text_obs(),
             'image': img_obs,
-            'anchor': None
+            'anchor': img_obs
         }
         # add action_valid to infos
         for i, info in enumerate(infos):
@@ -754,7 +807,8 @@ def make_envs(config):
     elif "mobiagent" in config.env.env_name.lower():
         from agent_system.environments.env_package.mobiagent import build_mobiagent_envs, mobiagent_projection
 
-        with open(config.env.extra_config_file, "r", encoding="utf-8") as f:
+        extra_config_file = os.path.join(os.path.dirname(__file__), 'env_package/mobiagent/configs/mobiagent_config.json')
+        with open(extra_config_file, "r", encoding="utf-8") as f:
             extra_config = json.load(f)
             train_tasks = extra_config["tasks"]["train"]
             val_tasks = extra_config["tasks"]["val"]
@@ -763,13 +817,19 @@ def make_envs(config):
             grounder_url = extra_config.get("grounder_url", None)
             use_rel_coords = extra_config.get("use_rel_coords", False)
             use_e2e = extra_config.get("use_e2e", False)
+            reward_model = extra_config.get("reward_model", None)
+            reward_api_key = extra_config.get("reward_api_key", None)
+            reward_base_url = extra_config.get("reward_base_url", None)
         
         train_env_kwargs = {
             "device_server_urls": train_device_server_urls,
             "tasks": train_tasks,
             "grounder_url": grounder_url,
             "use_rel_coords": use_rel_coords,
-            "use_e2e": use_e2e
+            "use_e2e": use_e2e,
+            "reward_model": reward_model,
+            "reward_api_key": reward_api_key,
+            "reward_base_url": reward_base_url
         }
         _envs = build_mobiagent_envs(seed=config.env.seed, env_num=config.data.train_batch_size, group_n=group_n, resources_per_worker=resources_per_worker, env_kwargs=train_env_kwargs)
         

@@ -94,6 +94,7 @@ class AdvantageEstimator(str, Enum):
     RLOO = "rloo"
     GRPO_PASSK = "grpo_passk"
     GiGPO = 'gigpo'
+    MobiGRPO = "mobigrpo"
 
 
 @dataclass
