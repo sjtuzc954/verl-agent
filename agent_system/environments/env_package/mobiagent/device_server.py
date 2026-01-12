@@ -9,6 +9,7 @@ import io
 from abc import ABC, abstractmethod
 import uuid
 from hmdriver2.driver import Driver
+from hmdriver2.hdc import list_devices
 import traceback
 from pathlib import Path
 
@@ -19,23 +20,23 @@ class CommandRequest(BaseModel):
 class Device(ABC):
     @abstractmethod
     def start_app(self, app_name):
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def screenshot(self):
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def click(self, x, y):
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def input(self, text):
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def swipe(self, direction, scale):
-        pass
+        raise NotImplementedError
 
 
 class HarmonyDevice(Device):
@@ -91,6 +92,7 @@ class HarmonyDevice(Device):
         package_name = self.app_package_names.get(app)
         if not package_name:
             raise ValueError(f"App '{app}' is not registered with a package name.")
+        self.d.unlock()
         self.d.force_start_app(package_name)
         time.sleep(2)
 
@@ -191,24 +193,30 @@ class AndroidDevice():
 
 app = FastAPI()
 
-EXECUTABLE_COMMANDS = {}
+EXECUTABLE_COMMANDS: list[dict[str, Callable]] = []
 
-device: Optional[Device] = None
+devices: list[Device] = []
 
-@app.post("/execute_command/")
-async def execute_command(request: CommandRequest):
+@app.get("/num_workers/")
+async def num_workers():
+    return {"num_workers": len(devices)}
+
+@app.post("/{worker_id}/execute_command/")
+async def execute_command(worker_id: int, request: CommandRequest):
     """
     接收命令和参数，并执行对应的函数。
     """
     command_name = request.command
     params = request.parameters
 
-    if command_name not in EXECUTABLE_COMMANDS:
+    if worker_id >= len(EXECUTABLE_COMMANDS):
+        return {"status": "error", "message": f"Worker ID out of range: {worker_id}. Maximum worker ID is {len(EXECUTABLE_COMMANDS) - 1}"}
+
+    if command_name not in EXECUTABLE_COMMANDS[worker_id]:
         return {"status": "error", "message": f"Unknown command: {command_name}"}
 
-
     try:
-        func_to_execute = EXECUTABLE_COMMANDS[command_name]
+        func_to_execute = EXECUTABLE_COMMANDS[worker_id][command_name]
         data = func_to_execute(**params)
 
         return {"status": "success", "data": data}
@@ -220,16 +228,40 @@ async def execute_command(request: CommandRequest):
         return {"status": "error", "message": f"Error executing command '{command_name}': {type(e).__name__}: {e}"}
 
 def register_commands():
-    global EXECUTABLE_COMMANDS, device
-    if device is None:
-        raise RuntimeError("Device not initialized. Cannot register commands.")
-    EXECUTABLE_COMMANDS = {
-        "start_app": device.start_app,
-        "click": device.click,
-        "input": device.input,
-        "swipe": device.swipe,
-        "screenshot": device.screenshot
-    }
+    global EXECUTABLE_COMMANDS, devices
+    for device in devices:
+        EXECUTABLE_COMMANDS.append({
+            "start_app": device.start_app,
+            "click": device.click,
+            "input": device.input,
+            "swipe": device.swipe,
+            "screenshot": device.screenshot
+        })
+
+def connect(device_type: str, endpoint: Optional[str] = None):
+    global devices
+    if endpoint is None:
+        if device_type == "android":
+            raise NotImplementedError
+        elif device_type == "harmony":
+            device_serials = list_devices()
+            if len(device_serials) == 0:
+                raise RuntimeError("No Harmony devices found")
+            else:
+                devices.append(HarmonyDevice(device_serials[0]))
+    elif endpoint == "all":
+        if device_type == "android":
+            raise NotImplementedError
+        elif device_type == "harmony":
+            device_serials = list_devices()
+            for serial in device_serials:
+                devices.append(HarmonyDevice(serial))
+    else:
+        if args.device_type == "android":
+            device = AndroidDevice(endpoint)
+        else:
+            device = HarmonyDevice(endpoint)
+        devices.append(device)
 
 if __name__ == "__main__":
     import uvicorn, argparse
@@ -237,17 +269,11 @@ if __name__ == "__main__":
     parser.add_argument("-t", "--device-type", type=str, choices=["android", "harmony"], default="android")
     parser.add_argument("-e", "--device-endpoint", type=str, default=None)
     parser.add_argument("-p", "--port", type=int, default=8000)
+
     args = parser.parse_args()
 
-    if args.device_type == "android":
-        device = AndroidDevice(args.device_endpoint)
-    else:
-        device = HarmonyDevice(args.device_endpoint)
-
+    connect(args.device_type, args.device_endpoint)
     register_commands()
 
     port = args.port
     uvicorn.run(app, host="0.0.0.0", port=port)
-
-
-
