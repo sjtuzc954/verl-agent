@@ -1,16 +1,16 @@
+import tempfile
 import time
 import uiautomator2 as u2
 import base64
-import tempfile, os
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Dict, Callable, Any, Optional, Tuple
 import io
 from abc import ABC, abstractmethod
 import uuid
-from intellicore.kits.appuse.mobiagent.config import supported_apps
-from intellicore.kits.deviceuse.devices.openharmony.device import OpenHarmonyDevice
+from hmdriver2.driver import Driver
 import traceback
+from pathlib import Path
 
 class CommandRequest(BaseModel):
     command: str
@@ -22,7 +22,7 @@ class Device(ABC):
         pass
 
     @abstractmethod
-    async def screenshot(self):
+    def screenshot(self):
         pass
 
     @abstractmethod
@@ -38,79 +38,91 @@ class Device(ABC):
         pass
 
 
-class HarmonyDevice:
+class HarmonyDevice(Device):
+    def __init__(self, endpoint=None):
+        super().__init__()
+        self.d = Driver(endpoint)
+        self.app_package_names = {
+            "携程": "com.ctrip.harmonynext",
+            "飞猪": "com.fliggy.hmos",
+            "IntelliOS": "ohos.hongmeng.intellios",
+            "同城": "com.tongcheng.hmos",
+            "携程旅行": "com.ctrip.harmonynext",
+            "饿了么": "me.ele.eleme",
+            "知乎": "com.zhihu.hmos",
+            "哔哩哔哩": "yylx.danmaku.bili",
+            "微信": "com.tencent.wechat",
+            "小红书": "com.xingin.xhs_hos",
+            "QQ音乐": "com.tencent.hm.qqmusic",
+            "高德地图": "com.amap.hmapp",
+            "淘宝": "com.taobao.taobao4hmos",
+            "微博": "com.sina.weibo.stage",
+            "京东": "com.jd.hm.mall",
+            "飞猪旅行": "com.fliggy.hmos",
+            "天气": "com.huawei.hmsapp.totemweather",
+            "什么值得买": "com.smzdm.client.hmos",
+            "闲鱼": "com.taobao.idlefish4ohos",
+            "慧通差旅": "com.smartcom.itravelhm",
+            "PowerAgent": "com.example.osagent",
+            "航旅纵横": "com.umetrip.hm.app",
+            "滴滴出行": "com.sdu.didi.hmos.psnger",
+            "电子邮件": "com.huawei.hmos.email",
+            "图库": "com.huawei.hmos.photos",
+            "日历": "com.huawei.hmos.calendar",
+            "心声社区": "com.huawei.it.hmxinsheng",
+            "信息": "com.ohos.mms",
+            "文件管理": "com.huawei.hmos.files",
+            "运动健康": "com.huawei.hmos.health",
+            "智慧生活": "com.huawei.hmos.ailife",
+            "豆包": "com.larus.nova.hm",
+            "WeLink": "com.huawei.it.welink",
+            "设置": "com.huawei.hmos.settings",
+            "懂车帝": "com.ss.dcar.auto",
+            "美团外卖": "com.meituan.takeaway",
+            "大众点评": "com.sankuai.dianping",
+            "美团": "com.sankuai.hmeituan",
+            "浏览器": "com.huawei.hmos.browser",
+            "微博": "com.sina.weibo.stage",
+            "饿了么": "me.ele.eleme",
+            "拼多多": "com.xunmeng.pinduoduo.hos"
+        }
 
-    def __init__(self, endpoint: str) -> None:
-        self.d = OpenHarmonyDevice.getDevice(endpoint)
-        self.app_package_names = {app: package for app, (package, _) in supported_apps.items()}
-        # Cache screen size; initialize as None and fetch on first use
-        self._screen_width: Optional[int] = None
-        self._screen_height: Optional[int] = None
+    def start_app(self, app):
+        package_name = self.app_package_names.get(app)
+        if not package_name:
+            raise ValueError(f"App '{app}' is not registered with a package name.")
+        self.d.force_start_app(package_name)
+        time.sleep(2)
 
-    def _get_screen_size(self) -> Tuple[int, int]:
-        """Get and cache screen size from a screenshot (only once)."""
-        return self._screen_width, self._screen_height
-
-    def start_app(self, app_name: str) -> None:
-        package_name = self.app_package_names.get(app_name, None)
-        if package_name is None:
-            raise ValueError(f"App '{app_name}' is not supported.")
-        if app_name == "IntelliOS":
-            self.d.startAbilityByUid(package_name, "MainAbility")
-        else:
-            self.d.restartApplicationByUid(package_name)
-        time.sleep(1.0)
-
-    async def screenshot(self) -> str:
-        img = await self.d.asyncScreenshot()
-        self._screen_width, self._screen_height = img.size
-        buffer = io.BytesIO()
-        img.save(buffer, format="JPEG")
-        img_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+    def screenshot(self):
+        path = Path(tempfile.gettempdir()) / (uuid.uuid4().hex + ".jpg")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.d.screenshot(str(path))
+        with open(path, "rb") as f:
+            img_b64 = base64.b64encode(f.read()).decode("utf-8")
+        # delete the file
+        path.unlink(missing_ok=True)
         return img_b64
 
-    def click(self, x: int, y: int) -> None:
-        self.d.click((x, y))
+    def click(self, x, y):
+        self.d.click(x, y)
+        time.sleep(0.5)
 
-    def input(self, text: str) -> None:
-        self.d.sendText(text)
+    def input(self, text):
+        self.d.shell("uitest uiInput keyEvent 2072 2017")
+        self.d.press_key(2071)
+        self.d.input_text(text)
 
-    def swipe(self, direction: str, scale: float = 0.5) -> None:
-        """
-        Scroll in a given direction.
-
-        Args:
-            direction (str): One of 'up', 'down', 'left', 'right'.
-            scale (float): Proportion of screen size to scroll (0.0 to 1.0).
-        """
-        width, height = self._get_screen_size()
-        center_x, center_y = width / 2.0, height / 2.0
-
-        # Compute offset based on scale
-        offset_x = width * scale / 2.0
-        offset_y = height * scale / 2.0
-
-        direction = direction.lower()
-        if direction == "up":
-            start = (center_x, center_y + offset_y)
-            end = (center_x, center_y - offset_y)
-        elif direction == "down":
-            start = (center_x, center_y - offset_y)
-            end = (center_x, center_y + offset_y)
-        elif direction == "left":
-            start = (center_x + offset_x, center_y)
-            end = (center_x - offset_x, center_y)
-        elif direction == "right":
-            start = (center_x - offset_x, center_y)
-            end = (center_x + offset_x, center_y)
-        else:
-            raise ValueError(f"Invalid scroll direction: {direction}. Use 'up', 'down', 'left', or 'right'.")
-
-        self.d.swipe(
-            (float(start[0]), float(start[1])),
-            (float(end[0]), float(end[1])),
-            duration=0.25
-        )
+    def swipe(self, direction, scale=0.5):
+        # self.d.swipe_ext(direction, scale=scale)
+        if direction.lower() == "up":
+            self.d.swipe(0.5,0.7,0.5,0.3,speed=2000)
+        elif direction.lower() == "down":
+            self.d.swipe(0.5,0.3,0.5,0.7,speed=2000)
+        elif direction.lower() == "left":
+            self.d.swipe(0.7,0.5,0.3,0.5,speed=2000)
+        elif direction.lower() == "right":
+            self.d.swipe(0.3,0.5,0.7,0.5,speed=2000)
 
 class AndroidDevice():
     def __init__(self, endpoint=None):
@@ -134,6 +146,14 @@ class AndroidDevice():
             "微信": "com.tencent.mm",
             "微博": "com.sina.weibo",
             "携程": "ctrip.android.view",
+            "华为商城": "com.vmall.client",
+            "华为视频": "com.huawei.himovie",
+            "华为音乐": "com.huawei.music",
+            "华为应用市场": "com.huawei.appmarket",
+            "拼多多": "com.xunmeng.pinduoduo",
+            "大众点评": "com.dianping.v1",
+            "小红书": "com.xingin.xhs",
+            "浏览器": "com.microsoft.emmx"
         }
 
     def start_app(self, app_name):
@@ -145,7 +165,7 @@ class AndroidDevice():
         if not self.d.app_wait(package_name, timeout=10):
             raise RuntimeError(f"Failed to start package '{package_name}'")
     
-    async def screenshot(self):
+    def screenshot(self):
         img = self.d.screenshot()
         buffer = io.BytesIO()
         img.save(buffer, format="JPEG")
@@ -172,7 +192,6 @@ class AndroidDevice():
 app = FastAPI()
 
 EXECUTABLE_COMMANDS = {}
-EXECUTABLE_ASYNC_COMMANDS = {}
 
 device: Optional[Device] = None
 
@@ -184,17 +203,13 @@ async def execute_command(request: CommandRequest):
     command_name = request.command
     params = request.parameters
 
-    if (command_name not in EXECUTABLE_COMMANDS) and (command_name not in EXECUTABLE_ASYNC_COMMANDS):
+    if command_name not in EXECUTABLE_COMMANDS:
         return {"status": "error", "message": f"Unknown command: {command_name}"}
 
 
     try:
-        if command_name in EXECUTABLE_COMMANDS:
-            func_to_execute = EXECUTABLE_COMMANDS[command_name]
-            data = func_to_execute(**params)
-        else:
-            func_to_execute = EXECUTABLE_ASYNC_COMMANDS[command_name]
-            data = await func_to_execute(**params)
+        func_to_execute = EXECUTABLE_COMMANDS[command_name]
+        data = func_to_execute(**params)
 
         return {"status": "success", "data": data}
     except TypeError as e:
@@ -205,7 +220,7 @@ async def execute_command(request: CommandRequest):
         return {"status": "error", "message": f"Error executing command '{command_name}': {type(e).__name__}: {e}"}
 
 def register_commands():
-    global EXECUTABLE_COMMANDS, EXECUTABLE_ASYNC_COMMANDS, device
+    global EXECUTABLE_COMMANDS, device
     if device is None:
         raise RuntimeError("Device not initialized. Cannot register commands.")
     EXECUTABLE_COMMANDS = {
@@ -213,9 +228,7 @@ def register_commands():
         "click": device.click,
         "input": device.input,
         "swipe": device.swipe,
-    }
-    EXECUTABLE_ASYNC_COMMANDS = {
-        "screenshot": device.screenshot,
+        "screenshot": device.screenshot
     }
 
 if __name__ == "__main__":
