@@ -1,6 +1,7 @@
 import tempfile
 import time
 import uiautomator2 as u2
+import adbutils
 import base64
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -12,6 +13,9 @@ from hmdriver2.driver import Driver
 from hmdriver2.hdc import list_devices
 import traceback
 from pathlib import Path
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import os
 
 class CommandRequest(BaseModel):
     command: str
@@ -88,10 +92,10 @@ class HarmonyDevice(Device):
             "拼多多": "com.xunmeng.pinduoduo.hos"
         }
 
-    def start_app(self, app):
-        package_name = self.app_package_names.get(app)
+    def start_app(self, app_name):
+        package_name = self.app_package_names.get(app_name, None)
         if not package_name:
-            raise ValueError(f"App '{app}' is not registered with a package name.")
+            raise ValueError(f"App '{app_name}' is not registered with a package name.")
         self.d.unlock()
         self.d.force_start_app(package_name)
         time.sleep(2)
@@ -128,11 +132,8 @@ class HarmonyDevice(Device):
 
 class AndroidDevice():
     def __init__(self, endpoint=None):
-        self.d = None
-        if endpoint:
-            self.d = u2.connect(endpoint)
-        else:
-            self.d = u2.connect()
+        self.d = u2.connect(endpoint)
+
         self.app_package_names = {
             "携程": "ctrip.android.view",
             "同城": "com.tongcheng.android",
@@ -197,6 +198,9 @@ EXECUTABLE_COMMANDS: list[dict[str, Callable]] = []
 
 devices: list[Device] = []
 
+# 创建线程池，用于异步执行同步的设备操作
+executor = ThreadPoolExecutor(max_workers=(os.cpu_count() * 2) if os.cpu_count() is not None else 8)
+
 @app.get("/num_workers/")
 async def num_workers():
     return {"num_workers": len(devices)}
@@ -217,7 +221,8 @@ async def execute_command(worker_id: int, request: CommandRequest):
 
     try:
         func_to_execute = EXECUTABLE_COMMANDS[worker_id][command_name]
-        data = func_to_execute(**params)
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(executor, lambda: func_to_execute(**params))
 
         return {"status": "success", "data": data}
     except TypeError as e:
@@ -242,7 +247,7 @@ def connect(device_type: str, endpoint: Optional[str] = None):
     global devices
     if endpoint is None:
         if device_type == "android":
-            raise NotImplementedError
+            devices.append(AndroidDevice())
         elif device_type == "harmony":
             device_serials = list_devices()
             if len(device_serials) == 0:
@@ -251,7 +256,8 @@ def connect(device_type: str, endpoint: Optional[str] = None):
                 devices.append(HarmonyDevice(device_serials[0]))
     elif endpoint == "all":
         if device_type == "android":
-            raise NotImplementedError
+            for device in adbutils.adb.iter_device():
+                devices.append(AndroidDevice(device.serial))
         elif device_type == "harmony":
             device_serials = list_devices()
             for serial in device_serials:
