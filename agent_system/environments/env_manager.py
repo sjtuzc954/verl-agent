@@ -617,43 +617,81 @@ class MobiAgentEnvironmentManager(EnvironmentManagerBase):
         
         success = defaultdict(list)
         
-        for bs in range(batch_size):
-            failed_step_idx = None
-            for i in reversed(range(len(total_batch_list[bs]))):
-                batch_item = total_batch_list[bs][i]
-                if batch_item['active_masks']:
-                    info = total_infos[bs][i]
-                    won_value = float(info['won'])
-                    failed_step_idx = info.get('failed_step_idx', None)
-                    success['success_rate'].append(won_value)
-                    break
-            for i in range(len(total_batch_list[bs])):
-                batch_item = total_batch_list[bs][i]
-                if not batch_item['active_masks']:
-                    break
-                if failed_step_idx is not None:
-                    # a failed trajectory
-                    if i < failed_step_idx:
-                        batch_item['rewards'] = 1.0
-                    elif i == failed_step_idx:
-                        batch_item['rewards'] = 0.0
-                    else:
-                        # mask it (not trained)
+        if self.config.reward_model.reward_manager != "process":
+            for bs in range(batch_size):
+                for i in reversed(range(len(total_batch_list[bs]))):
+                    batch_item = total_batch_list[bs][i]
+                    if batch_item['active_masks']:
+                        info = total_infos[bs][i]
+                        won_value = float(info['won'])
+                        success['success_rate'].append(won_value)
+                        break
+        else:
+            # try mask trajectories without done
+            mask = [False] * batch_size
+            for bs in range(batch_size):
+                for i in reversed(range(len(total_batch_list[bs]))):
+                    batch_item = total_batch_list[bs][i]
+                    if batch_item["active_masks"]:
+                        info = total_infos[bs][i]
+                        failed_step_idx = info.get('failed_step_idx', None)
+                        status = info.get('status', None)
+                        won = info.get('won', 0.0)
+                        if (
+                            status is None or 
+                            (status == "ok" and won == 0.0 and failed_step_idx is None)
+                        ):
+                            mask[bs] = True
+                            break
+            
+            if not all(mask):
+                # perform masking only when at least one trajectory is not masked
+                # to avoid errors caused by empty training batch
+                for bs in range(batch_size):
+                    if not mask[bs]:
+                        continue
+                    for i in range(len(total_batch_list[bs])):
+                        batch_item = total_batch_list[bs][i]
                         batch_item['active_masks'] = False
-                else:
-                    # 0 reward for step limit exceed
-                    # 1 reward for successful trajectories
-                    batch_item['rewards'] = total_episode_rewards[bs]
+
+            # reward shaping
+            for bs in range(batch_size):
+                failed_step_idx = None
+                for i in reversed(range(len(total_batch_list[bs]))):
+                    batch_item = total_batch_list[bs][i]
+                    if batch_item['active_masks']:
+                        info = total_infos[bs][i]
+                        won_value = float(info['won'])
+                        failed_step_idx = info.get('failed_step_idx', None)
+                        success['success_rate'].append(won_value)
+                        break
+                for i in range(len(total_batch_list[bs])):
+                    batch_item = total_batch_list[bs][i]
+                    if not batch_item['active_masks']:
+                        break
+                    if failed_step_idx is not None:
+                        # a failed trajectory
+                        if i < failed_step_idx:
+                            batch_item['rewards'] = 1.0
+                        elif i == failed_step_idx:
+                            batch_item['rewards'] = 0.0
+                        else:
+                            # mask all actions AFTER the first failed action in training
+                            batch_item['active_masks'] = False
+                    else:
+                        # 0 reward for step limit exceed
+                        # 1 reward for successful trajectories
+                        batch_item['rewards'] = total_episode_rewards[bs]
         
         # recompute episode rewards
-        for bs in range(batch_size):
-            total_episode_reward = 0.0
-            for i in range(len(total_batch_list[bs])):
-                batch_item = total_batch_list[bs][i]
-                if not batch_item['active_masks']:
-                    break
-                total_episode_reward += batch_item['rewards']
-            total_episode_rewards[bs] = total_episode_reward
+        # for bs in range(batch_size):
+        #     total_episode_reward = 0.0
+        #     for i in range(len(total_batch_list[bs])):
+        #         batch_item = total_batch_list[bs][i]
+        #         if not batch_item['active_masks']:
+        #             break
+        #         total_episode_reward += batch_item['rewards']
+        #     total_episode_rewards[bs] = total_episode_reward
         
         assert len(success['success_rate']) == batch_size
 
@@ -829,7 +867,8 @@ def make_envs(config):
             "use_e2e": use_e2e,
             "reward_model": reward_model,
             "reward_api_key": reward_api_key,
-            "reward_base_url": reward_base_url
+            "reward_base_url": reward_base_url,
+            "reward_mode": config.reward_model.get("reward_manager", "episode")
         }
         _envs = build_mobiagent_envs(seed=config.env.seed, env_num=config.data.train_batch_size, group_n=group_n, resources_per_worker=resources_per_worker, env_kwargs=train_env_kwargs)
         

@@ -19,7 +19,7 @@ from agent_system.environments.prompts import GROUNDER_PROMPT, REWARD_PROMPT, ID
 
 RESIZE_FACTOR = 0.5  # Resize factor for screenshots to reduce size
 
-def retry(max_attempts=3):
+def retry(max_attempts=3, default=None, check_fn=None):
     """
     Decorator that retries a function up to max_attempts times
     """
@@ -29,15 +29,17 @@ def retry(max_attempts=3):
             for attempt in range(1, max_attempts + 1):
                 try:
                     result = func(*args, **kwargs)
+                    if check_fn is not None and not check_fn(result):
+                        raise ValueError(f"Result does not satisfy check_fn: {result}")
                     return result
                 except Exception as e:
-                    print(f"{func.__name__} failed with error: {e}")
+                    print(f"{func.__name__} failed with error: {e.__class__.__name__}: {e}")
 
                 if attempt < max_attempts:
                     print(f"retrying... (attempt {attempt}/{max_attempts})")
                 
             print(f"{func.__name__} failed after {max_attempts} attempts")
-            return None
+            return default
         return wrapper
     return decorator
 
@@ -74,6 +76,7 @@ class MobiAgentWorker:
         os.environ["https_proxy"] = "http://127.0.0.1:7897"
         os.environ["no_proxy"] = "localhost,127.0.0.1"
         self.reward_model = reward_kwargs.pop("model")
+        self.reward_mode = reward_kwargs.pop("mode")
         self.reward_client = OpenAI(**reward_kwargs)
 
         self.is_done = False
@@ -195,12 +198,13 @@ class MobiAgentWorker:
             elif action_type == "done":
                 done = True
                 self.is_done = True
-                if parameters.get("status", "success") == "success":
-                    # _get_reward now handles both reward evaluation and failed step identification
-                    reward, failed_step = self._get_reward()
-                else:
-                    reward = 0.0
-                    failed_step = None
+                reward, failed_step = self._get_reward()
+                # if parameters.get("status", "success") == "success":
+                #     # _get_reward now handles both reward evaluation and failed step identification
+                #     reward, failed_step = self._get_reward()
+                # else:
+                #     reward = 0.0
+                #     failed_step = None
                 
                 info["won"] = reward == 1.0
                 
@@ -216,34 +220,69 @@ class MobiAgentWorker:
             time.sleep(1.5)
 
             obs = self._get_obs()
-        except (json.decoder.JSONDecodeError, InvalidActionError, KeyError):
-            reward = -1.0
+        except Exception as e:
+            reward = 0.0
             done = True
             obs = np.array(self.last_obs) if self.last_obs else None
-            info = {"status": "error", "error": traceback.format_exc(), "won": 0, "failed_step_idx": step_idx}
+            failed_step = step_idx if isinstance(e, (json.decoder.JSONDecodeError, InvalidActionError, KeyError)) else None
+            info = {"status": "error", "error": traceback.format_exc(), "won": 0, "failed_step_idx": failed_step}
             self.is_done = True
 
         return obs, reward, done, info
 
-    def _build_trajectory_message(self):
+    def _build_trajectory_message(self, init_prompt: str, max_images_per_turn: int = 16) -> list[dict]:
         """
-        Build trajectory message content for LLM evaluation.
+        Build trajectory messages for LLM evaluation with image limit per turn.
+        
+        Args:
+            init_prompt: The initial reward prompt text
+            max_images_per_turn: Maximum number of images allowed per conversation turn (default: 16)
+            
         Returns:
-            A list of message content items containing screenshots and actions (without prompt).
+            A list of messages (with role and content) that can span multiple turns if needed.
         """
-        message_content = []
+        messages = []
+        current_content = [{"type": "text", "text": init_prompt}]
+        current_image_count = 0
         
         # Add trajectory: each step contains [screenshot: PIL.Image, action: dict]
         texts = []
+        total_images = len(self.traj)
+        
         for i, (screenshot, action) in enumerate(self.traj):
+            # Check if we need to start a new turn
+            if current_image_count >= max_images_per_turn:
+                # Add continuation prompt
+                current_content.append({
+                    "type": "text",
+                    "text": "I haven't finished sending all the screenshots and actions due to API limit. Please reply 'Received' to continue."
+                })
+                
+                # Add current user message
+                messages.append({
+                    "role": "user",
+                    "content": current_content
+                })
+                
+                # Add assistant acknowledgment
+                messages.append({
+                    "role": "assistant",
+                    "content": "Received."
+                })
+                
+                # Start new content for next turn
+                current_content = []
+                current_image_count = 0
+            
             # Add screenshot
             buffer = io.BytesIO()
             screenshot.save(buffer, format="JPEG")
             screenshot_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-            message_content.append({
+            current_content.append({
                 "type": "image_url",
                 "image_url": {"url": f"data:image/jpeg;base64,{screenshot_base64}"}
             })
+            current_image_count += 1
             
             # Add action description as text
             action_text = f"Step {i+1} - Action: {action['action']}"
@@ -251,7 +290,7 @@ class MobiAgentWorker:
                 action_text += f", Parameters: {action['parameters']}"
             action_text += f", Reasoning: {action['reasoning']}"
             
-            message_content.append({
+            current_content.append({
                 "type": "text",
                 "text": action_text
             })
@@ -259,10 +298,17 @@ class MobiAgentWorker:
             texts.append(action_text)
 
         print(f"Trajectory texts: \n{'\n'.join(texts)}")
+        print(f"Total images: {total_images}, split into {len(messages)//2 + 1} turn(s)")
         
-        return message_content
+        # Add the final user message
+        messages.append({
+            "role": "user",
+            "content": current_content
+        })
+        
+        return messages
 
-    @retry(max_attempts=3)
+    @retry(max_attempts=3, default=(0.0, None), check_fn=lambda x: isinstance(x, tuple) and len(x) == 2 and x[0] in [0.0, 1.0] and (x[1] is None or isinstance(x[1], int)))
     def _get_reward(self):
         """
         Use LLM as judge to evaluate if the task was successfully completed.
@@ -271,24 +317,14 @@ class MobiAgentWorker:
         Returns (reward, failed_step) where:
         - reward: 1.0 if successful (Choice A), 0.0 if not successful (Choice B)
         - failed_step: 1-indexed step number that caused failure, or None if task succeeded
-        """        
+        """
         # Build the reward prompt with task description
         reward_prompt = REWARD_PROMPT.format(task=self.current_task)
         
-        # Build trajectory message content
-        trajectory_content = self._build_trajectory_message()
+        # Build trajectory messages (may span multiple turns if many images)
+        messages = self._build_trajectory_message(reward_prompt)
         
-        # Prepend prompt to trajectory
-        message_content = [{"type": "text", "text": reward_prompt}] + trajectory_content
-        
-        # First round: evaluate task success
-        messages = [
-            {
-                "role": "user",
-                "content": message_content
-            }
-        ]
-        
+        # Send messages to evaluate task success
         response = self.reward_client.chat.completions.create(
             model=self.reward_model,
             messages=messages
@@ -314,6 +350,8 @@ class MobiAgentWorker:
         if choice == "A":
             return 1.0, None
         elif choice == "B":
+            if self.reward_mode != "process":
+                return 0.0, None
             # Second round: identify failed step using multi-turn conversation
             messages.append({
                 "role": "assistant",
@@ -361,10 +399,12 @@ class MobiAgentWorker:
         self.traj = []
         self.last_obs = None
 
-        requests.post(f"{self.device_server_url}/execute_command/", json={
+        response = requests.post(f"{self.device_server_url}/execute_command/", json={
             "command": "start_app",
             "parameters": {"app_name": task["app_name"]}
         })
+
+        print(f"Picked task: {task}")
 
         self.current_task = task["description"]
 
@@ -514,7 +554,8 @@ def build_mobiagent_envs(
     reward_kwargs = {
         "model": env_kwargs.get("reward_model", None),
         "api_key": env_kwargs.get("reward_api_key", None),
-        "base_url": env_kwargs.get("reward_base_url", None)
+        "base_url": env_kwargs.get("reward_base_url", None),
+        "mode": env_kwargs.get("reward_mode", "episode")
     }
     return MobiAgentMultiProcEnvs(
         seed=seed,
