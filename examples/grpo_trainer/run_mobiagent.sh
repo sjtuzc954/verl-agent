@@ -2,11 +2,14 @@ set -x
 ENGINE=${1:-vllm}
 # export VLLM_ATTENTION_BACKEND=XFORMERS
 
-num_cpus_per_env_worker=0.1 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
+num_cpus_per_env_worker=1 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
 
 train_data_size=1
 val_data_size=1
-group_size=2
+group_size=8
+experiment_name=base_v9.6_grpo_orm_0114_v0
+
+export PYTHONUNBUFFERED=1
 
 python3 -m examples.data_preprocess.prepare \
     --mode 'visual' \
@@ -19,8 +22,8 @@ python3 -m verl.trainer.main_ppo \
     data.val_files=$HOME/data/verl-agent/visual/test.parquet \
     data.train_batch_size=$train_data_size \
     data.val_batch_size=$val_data_size \
-    data.max_prompt_length=4096 \
-    data.max_response_length=512 \
+    data.max_prompt_length=16384 \
+    data.max_response_length=1024 \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
     data.return_raw_chat=True \
@@ -37,13 +40,13 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.name=$ENGINE \
+    actor_rollout_ref.rollout.temperature=0.7 \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
-    actor_rollout_ref.rollout.enable_chunked_prefill=True \
+    actor_rollout_ref.rollout.enable_chunked_prefill=False \
     actor_rollout_ref.rollout.enforce_eager=True \
-    actor_rollout_ref.rollout.max_num_batched_tokens=4096 \
-    actor_rollout_ref.rollout.max_model_len=4096 \
+    actor_rollout_ref.rollout.max_model_len=16384 \
     actor_rollout_ref.rollout.free_cache_engine=True \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=4 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.use_invalid_action_penalty=True \
@@ -51,17 +54,18 @@ python3 -m verl.trainer.main_ppo \
     algorithm.use_kl_in_reward=False \
     env.env_name=MobiAgent \
     env.seed=0 \
-    env.max_steps=16 \
+    env.max_steps=32 \
     env.rollout.n=$group_size \
     env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
-    reward_model.reward_manager=process \
+    reward_model.reward_manager=episode \
     trainer.critic_warmup=0 \
     trainer.logger=['console','wandb'] \
     trainer.project_name='verl-agent-MobiAgent' \
-    trainer.experiment_name='grpo_qwen3_e2e_prm_v0_0' \
+    trainer.experiment_name=$experiment_name \
     trainer.n_gpus_per_node=4 \
     trainer.nnodes=1 \
     trainer.test_freq=-1 \
-    trainer.save_freq=-1 \
-    trainer.total_epochs=5 \
-    trainer.val_before_train=False $@
+    trainer.save_freq=20 \
+    trainer.default_local_dir=$HOME/modelarts/user-job-dir/code2/models/mobimind-rl/$experiment_name \
+    trainer.total_epochs=60 \
+    trainer.val_before_train=False $@ 2>&1 | tee $experiment_name.log

@@ -608,7 +608,7 @@ class MobiAgentEnvironmentManager(EnvironmentManagerBase):
 
     def success_evaluator(self, *args, **kwargs) -> Dict[str, np.ndarray]:
         """
-        hack this for reward shaping
+        hack this for reward shaping or masking
         """
         total_infos = kwargs['total_infos']
         total_batch_list = kwargs['total_batch_list']
@@ -617,43 +617,38 @@ class MobiAgentEnvironmentManager(EnvironmentManagerBase):
         
         success = defaultdict(list)
         
-        if self.config.reward_model.reward_manager != "process":
-            for bs in range(batch_size):
-                for i in reversed(range(len(total_batch_list[bs]))):
-                    batch_item = total_batch_list[bs][i]
-                    if batch_item['active_masks']:
-                        info = total_infos[bs][i]
-                        won_value = float(info['won'])
-                        success['success_rate'].append(won_value)
-                        break
-        else:
-            # try mask trajectories without done
-            mask = [False] * batch_size
-            for bs in range(batch_size):
-                for i in reversed(range(len(total_batch_list[bs]))):
-                    batch_item = total_batch_list[bs][i]
-                    if batch_item["active_masks"]:
-                        info = total_infos[bs][i]
-                        failed_step_idx = info.get('failed_step_idx', None)
-                        status = info.get('status', None)
-                        won = info.get('won', 0.0)
-                        if (
-                            status is None or 
-                            (status == "ok" and won == 0.0 and failed_step_idx is None)
-                        ):
-                            mask[bs] = True
-                            break
-            
-            if not all(mask):
-                # perform masking only when at least one trajectory is not masked
-                # to avoid errors caused by empty training batch
-                for bs in range(batch_size):
-                    if not mask[bs]:
-                        continue
-                    for i in range(len(total_batch_list[bs])):
-                        batch_item = total_batch_list[bs][i]
-                        batch_item['active_masks'] = False
+        # try mask trajectories
+        mask = [False] * batch_size
+        for bs in range(batch_size):
+            for i in reversed(range(len(total_batch_list[bs]))):
+                batch_item = total_batch_list[bs][i]
+                if batch_item["active_masks"]:
+                    info = total_infos[bs][i]
+                    mask[bs] = info.get('mask', False)
+                    break
 
+        if not all(mask):
+            # perform masking only when at least one trajectory is not masked
+            # to avoid errors caused by empty training batch
+            for bs in range(batch_size):
+                if not mask[bs]:
+                    continue
+                for i in range(len(total_batch_list[bs])):
+                    batch_item = total_batch_list[bs][i]
+                    batch_item['active_masks'] = False
+
+        for bs in range(batch_size):
+            for i in reversed(range(len(total_batch_list[bs]))):
+                batch_item = total_batch_list[bs][i]
+                if batch_item['active_masks']:
+                    info = total_infos[bs][i]
+                    won_value = float(info['won'])
+                    success['success_rate'].append(won_value)
+                    break
+            else:
+                success['success_rate'].append(0.0)
+
+        if self.config.reward_model.reward_manager == "process":
             # reward shaping
             for bs in range(batch_size):
                 failed_step_idx = None
@@ -661,9 +656,7 @@ class MobiAgentEnvironmentManager(EnvironmentManagerBase):
                     batch_item = total_batch_list[bs][i]
                     if batch_item['active_masks']:
                         info = total_infos[bs][i]
-                        won_value = float(info['won'])
                         failed_step_idx = info.get('failed_step_idx', None)
-                        success['success_rate'].append(won_value)
                         break
                 for i in range(len(total_batch_list[bs])):
                     batch_item = total_batch_list[bs][i]

@@ -18,6 +18,7 @@ from functools import wraps
 from agent_system.environments.prompts import GROUNDER_PROMPT, REWARD_PROMPT, IDENTIFY_FAIL_ACTION_PROMPT, FOLLOW_UP_IDENTIFY_STEP_PROMPT
 
 RESIZE_FACTOR = 0.5  # Resize factor for screenshots to reduce size
+MAX_STEPS = 32
 
 def retry(max_attempts=3, default=None, check_fn=None):
     """
@@ -198,7 +199,7 @@ class MobiAgentWorker:
             elif action_type == "done":
                 done = True
                 self.is_done = True
-                reward, failed_step = self._get_reward()
+                reward, failed_step= self._get_reward()
                 # if parameters.get("status", "success") == "success":
                 #     # _get_reward now handles both reward evaluation and failed step identification
                 #     reward, failed_step = self._get_reward()
@@ -209,10 +210,14 @@ class MobiAgentWorker:
                 info["won"] = reward == 1.0
                 
                 # If the task failed and we identified the failed step
-                if failed_step is not None:
+                if reward == 0.0 and failed_step is not None:
                     # Convert to 0-indexed for trajectory access
                     info["failed_step_idx"] = failed_step - 1
                     print(f"Identified failed step: {failed_step}, {self.traj[failed_step - 1][1]}")
+                
+
+            if len(self.traj) >= MAX_STEPS and action_type != "done" and self.reward_mode == "process":
+                info["mask"] = True
 
             if request_body is not None:
                 requests.post(f"{self.device_server_url}/execute_command/", json=request_body)
